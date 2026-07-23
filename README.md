@@ -419,6 +419,36 @@ El comando `show` permite inspeccionar cualquier objeto direccionable por conten
 
 ---
 
+## 📈 Mejoras Recientes
+
+### Ramas y Navegación
+- **Listado de ramas mejorado**: Muestra el hash corto de cada rama junto al nombre.
+- **Validación de nombres**: Rechaza nombres vacíos, con caracteres inválidos o duplicados.
+- **Checkout seguro**: Detecta cambios locales antes de cambiar de rama para evitar pérdida de datos.
+- **Restauración automática**: El directorio de trabajo y el índice se sincronizan correctamente al cambiar de rama.
+- **HEAD robusto**: Validación mejorada contra archivos corruptos o vacíos.
+
+### Seguridad de Archivos
+- **Protección de `.minigit`**: Bloqueo explícito de operaciones sobre la carpeta interna del repositorio.
+- **Validación de symlinks**: Detecta y rechaza enlaces simbólicos que apuntan fuera del repositorio.
+- **Detección de bytes nulos**: Previene errores del sistema de archivos por rutas malformadas.
+- **Mensajes de error claros**: Cada tipo de violación de seguridad muestra un mensaje descriptivo.
+
+### Integridad y Recuperación
+- **Limpieza automática**: Al abrir un repositorio, se eliminan archivos temporales y locks abandonados.
+- **Detección de locks huérfanos**: Identifica bloqueos de procesos que ya no existen y los libera.
+- **Sincronización de directorio**: Las escrituras atómicas incluyen `Sync()` del directorio para persistencia garantizada.
+- **Verificación de objetos vacíos**: Detecta y rechaza objetos corruptos o truncados al leerlos.
+
+### Pruebas y Calidad
+- **Pruebas Round Trip**: Validación completa de serialización y deserialización de objetos.
+- **Estabilidad de hashes**: Verificación de que el mismo contenido siempre genera el mismo hash.
+- **Pruebas de corrupción**: Simulación de objetos dañados para verificar la detección de errores.
+- **Flujo completo**: Pruebas de integración que cubren init, add, commit, branch, checkout y restore.
+- **Código estandarizado**: Formateo consistente con `gofmt` y análisis estático con `go vet`.
+
+---
+
 ## 🧪 Pruebas
 
 Para ejecutar la suite completa de pruebas unitarias e integración:
