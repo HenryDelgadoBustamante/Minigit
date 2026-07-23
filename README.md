@@ -57,6 +57,7 @@ MiniGit ofrece soporte para comandos en inglés y sus correspondientes alias en 
 | `minigit branch [nombre]` | `rama`, `ramas` | Lista las ramas existentes o crea una nueva rama apuntando al commit actual. |
 | `minigit diff <commit1> [commit2]`| `diferencias` | *(Opcional)* Compara cambios de estructura (A, M, D, R) y líneas de contenido (`-` / `+`) entre dos commits. |
 | `minigit merge <rama>` | `fusionar`, `unir` | *(Opcional)* Realiza una fusión *fast-forward* de la rama especificada en la rama activa. |
+| `minigit web [puerto]` | `ui`, `visor` | *(EPIC 16)* Inicia un servidor web local de solo lectura en `http://localhost:8080` para visualizar el estado, historial, ramas, archivos y diffs del repositorio. |
 | `minigit help [comando]` | `ayuda` | Muestra la ayuda general o la documentación detallada de un comando específico. |
 | `minigit version` | | Muestra la versión actual instalada de MiniGit. |
 
@@ -67,11 +68,12 @@ MiniGit ofrece soporte para comandos en inglés y sus correspondientes alias en 
 ### Flujo de Trabajo Básico (PowerShell / Bash)
 
 ```bash
-# 1. Inicializar un repositorio
-minigit init mi-proyecto
-cd mi-proyecto
+# 1. Crear e inicializar un nuevo proyecto dentro de la carpeta dedicada proyectos_minigit/
+mkdir proyectos_minigit/mi-proyecto
+cd proyectos_minigit/mi-proyecto
+..\..\minigit.exe init
 
-# 2. Crear archivos
+# 2. Crear archivos dentro del nuevo proyecto
 echo "Hola MiniGit" > README.md
 mkdir src
 echo "package main" > src/main.go

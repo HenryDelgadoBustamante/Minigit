@@ -50,6 +50,21 @@ func Execute(args []string) int {
 			return 1
 		}
 		return 0
+
+	case "web", "ui", "visor":
+		if len(args) > 1 && (args[1] == "--help" || args[1] == "-h") {
+			ShowCommandHelp("web")
+			return 0
+		}
+		portStr := ""
+		if len(args) > 1 {
+			portStr = args[1]
+		}
+		if err := commands.RunWeb(".", portStr); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			return 1
+		}
+		return 0
 	}
 
 	// Commands that require an existing repository

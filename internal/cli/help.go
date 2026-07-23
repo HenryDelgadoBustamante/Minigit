@@ -26,6 +26,7 @@ Comandos disponibles (Inglés y Español):
   branch | rama [nombre]                  Lista o crea ramas
   diff | diferencias <commit1> <commit2>  Compara cambios estructurales y líneas entre commits
   merge | fusionar <rama>                 Realiza fusión fast-forward de la rama especificada
+  web | ui | visor [puerto]               Inicia el visor web local de solo lectura
   help | ayuda [comando]                  Muestra la ayuda de un comando
   version                                 Muestra la versión actual
 
@@ -37,6 +38,7 @@ Ejemplos en español:
   minigit historial --oneline
   minigit diferencias HEAD~1 HEAD
   minigit fusionar feature-login
+  minigit web 8080
 `
 	fmt.Print(helpText)
 }
@@ -108,6 +110,13 @@ Compara dos commits e identifica archivos agregados (A), modificados (M), elimin
      minigit fusionar <rama-destino>
 
 Realiza una fusión fast-forward de la rama especificada en la rama actual. Si las ramas han divergido, la operación será rechazada.`)
+
+	case "web", "ui", "visor":
+		fmt.Println(`Uso: minigit web [puerto]
+     minigit ui [puerto]
+     minigit visor [puerto]
+
+Inicia un servidor web local y de solo lectura para inspeccionar el estado, historial, ramas, archivos y diferencias del repositorio mediante una interfaz gráfica. Por defecto utiliza el puerto 8080.`)
 
 	case "version":
 		fmt.Printf("MiniGit versión %s\n", Version)
