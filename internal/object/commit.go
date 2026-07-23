@@ -7,6 +7,7 @@ import (
 	"time"
 )
 
+// Commit represents a snapshot commit object pointing to a root Tree.
 type Commit struct {
 	Tree       string
 	Parent     string
@@ -16,6 +17,7 @@ type Commit struct {
 	CreatedAt  time.Time
 }
 
+// NewCommit creates a new Commit struct ensuring CreatedAt is converted to UTC.
 func NewCommit(tree, parent, name, email, message string, createdAt time.Time) *Commit {
 	return &Commit{
 		Tree:       tree,
@@ -27,10 +29,17 @@ func NewCommit(tree, parent, name, email, message string, createdAt time.Time) *
 	}
 }
 
+// Type returns ObjectType "commit".
 func (c *Commit) Type() ObjectType {
 	return TypeCommit
 }
 
+// Serialize serializes the commit object deterministically.
+// Format:
+// tree <hash>\n
+// [parent <hash>\n]
+// author <name> <<email>> <RFC3339_timestamp>\n\n
+// <message>
 func (c *Commit) Serialize() []byte {
 	var buf bytes.Buffer
 	buf.WriteString(fmt.Sprintf("tree %s\n", c.Tree))
@@ -43,6 +52,20 @@ func (c *Commit) Serialize() []byte {
 	return EncodeObject(TypeCommit, buf.Bytes())
 }
 
+// isHex64 checks whether a string is a 64-character lowercase hex hash.
+func isHex64(s string) bool {
+	if len(s) != 64 {
+		return false
+	}
+	for _, c := range s {
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
+			return false
+		}
+	}
+	return true
+}
+
+// DecodeCommit parses raw object payload into a Commit struct and validates header fields.
 func DecodeCommit(raw []byte) (*Commit, error) {
 	objType, _, body, err := DecodeObject(raw)
 	if err != nil {
@@ -55,7 +78,7 @@ func DecodeCommit(raw []byte) (*Commit, error) {
 	content := string(body)
 	headerEnd := strings.Index(content, "\n\n")
 	if headerEnd == -1 {
-		return nil, fmt.Errorf("%w: malformed commit header", ErrInvalidHeader)
+		return nil, fmt.Errorf("%w: malformed commit header separation", ErrInvalidHeader)
 	}
 
 	headerLines := strings.Split(content[:headerEnd], "\n")
@@ -67,12 +90,11 @@ func DecodeCommit(raw []byte) (*Commit, error) {
 
 	for _, line := range headerLines {
 		if strings.HasPrefix(line, "tree ") {
-			commit.Tree = strings.TrimPrefix(line, "tree ")
+			commit.Tree = strings.TrimSpace(strings.TrimPrefix(line, "tree "))
 		} else if strings.HasPrefix(line, "parent ") {
-			commit.Parent = strings.TrimPrefix(line, "parent ")
+			commit.Parent = strings.TrimSpace(strings.TrimPrefix(line, "parent "))
 		} else if strings.HasPrefix(line, "author ") {
 			rawAuthor := strings.TrimPrefix(line, "author ")
-			// Parse: Author Name <email@example.com> 2026-07-22T16:50:00Z
 			emailStart := strings.Index(rawAuthor, "<")
 			emailEnd := strings.Index(rawAuthor, ">")
 			if emailStart != -1 && emailEnd != -1 && emailEnd > emailStart {
@@ -81,13 +103,23 @@ func DecodeCommit(raw []byte) (*Commit, error) {
 				timeStr := strings.TrimSpace(rawAuthor[emailEnd+1:])
 				if parsedTime, err := time.Parse(time.RFC3339, timeStr); err == nil {
 					commit.CreatedAt = parsedTime.UTC()
+				} else {
+					return nil, fmt.Errorf("%w: invalid author timestamp format '%s'", ErrInvalidHeader, timeStr)
 				}
+			} else {
+				return nil, fmt.Errorf("%w: malformed author header line '%s'", ErrInvalidHeader, line)
 			}
 		}
 	}
 
 	if commit.Tree == "" {
 		return nil, fmt.Errorf("%w: commit missing tree reference", ErrInvalidHeader)
+	}
+	if !isHex64(commit.Tree) {
+		return nil, fmt.Errorf("%w: invalid tree hash in commit '%s'", ErrInvalidHeader, commit.Tree)
+	}
+	if commit.Parent != "" && !isHex64(commit.Parent) {
+		return nil, fmt.Errorf("%w: invalid parent hash in commit '%s'", ErrInvalidHeader, commit.Parent)
 	}
 
 	return commit, nil

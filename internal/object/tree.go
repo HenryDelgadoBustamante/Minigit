@@ -8,6 +8,7 @@ import (
 	"strings"
 )
 
+// TreeEntry represents a directory record linking a file or sub-directory.
 type TreeEntry struct {
 	Name string
 	Path string
@@ -16,10 +17,12 @@ type TreeEntry struct {
 	Mode uint32
 }
 
+// Tree represents a directory snapshot containing an array of TreeEntry records.
 type Tree struct {
 	Entries []TreeEntry
 }
 
+// NewTree creates a new Tree instance with deterministically sorted entries.
 func NewTree(entries []TreeEntry) *Tree {
 	sorted := make([]TreeEntry, len(entries))
 	copy(sorted, entries)
@@ -27,6 +30,7 @@ func NewTree(entries []TreeEntry) *Tree {
 	return &Tree{Entries: sorted}
 }
 
+// sortTreeEntries sorts entries deterministically by Name (alphabetical), then by Hash.
 func sortTreeEntries(entries []TreeEntry) {
 	sort.Slice(entries, func(i, j int) bool {
 		if entries[i].Name == entries[j].Name {
@@ -36,6 +40,7 @@ func sortTreeEntries(entries []TreeEntry) {
 	})
 }
 
+// Type returns ObjectType "tree".
 func (t *Tree) Type() ObjectType {
 	return TypeTree
 }
@@ -52,7 +57,7 @@ func (t *Tree) Serialize() []byte {
 	return EncodeObject(TypeTree, buf.Bytes())
 }
 
-// DecodeTree parses tree payload into a Tree struct.
+// DecodeTree parses tree payload into a Tree struct and validates each entry.
 func DecodeTree(raw []byte) (*Tree, error) {
 	objType, _, body, err := DecodeObject(raw)
 	if err != nil {
@@ -72,19 +77,39 @@ func DecodeTree(raw []byte) (*Tree, error) {
 		}
 		parts := strings.SplitN(line, " ", 4)
 		if len(parts) != 4 {
-			return nil, fmt.Errorf("%w: malformed tree entry: %s", ErrInvalidHeader, line)
+			return nil, fmt.Errorf("%w: malformed tree entry line '%s'", ErrInvalidHeader, line)
 		}
 
 		mode, err := strconv.ParseUint(parts[0], 8, 32)
 		if err != nil {
-			return nil, fmt.Errorf("%w: invalid tree entry mode: %v", ErrInvalidHeader, err)
+			return nil, fmt.Errorf("%w: invalid tree entry mode '%s': %v", ErrInvalidHeader, parts[0], err)
+		}
+
+		entryType := parts[1]
+		if entryType != string(TypeBlob) && entryType != string(TypeTree) {
+			return nil, fmt.Errorf("%w: invalid tree entry type '%s'", ErrInvalidHeader, entryType)
+		}
+
+		hash := parts[2]
+		if len(hash) != 64 {
+			return nil, fmt.Errorf("%w: invalid tree entry hash length '%s'", ErrInvalidHeader, hash)
+		}
+		for _, c := range hash {
+			if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
+				return nil, fmt.Errorf("%w: non-hex character in tree entry hash '%s'", ErrInvalidHeader, hash)
+			}
+		}
+
+		name := parts[3]
+		if name == "" {
+			return nil, fmt.Errorf("%w: empty name in tree entry", ErrInvalidHeader)
 		}
 
 		entries = append(entries, TreeEntry{
 			Mode: uint32(mode),
-			Type: parts[1],
-			Hash: parts[2],
-			Name: parts[3],
+			Type: entryType,
+			Hash: hash,
+			Name: name,
 		})
 	}
 

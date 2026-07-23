@@ -55,7 +55,7 @@ func TestMiniGitFullWorkflow(t *testing.T) {
 
 	// 2. Duplicate initialization error
 	code, _, errOut = runCLI(repoDir, "init")
-	if code == 0 || !strings.Contains(errOut, "repository already exists") {
+	if code == 0 || (!strings.Contains(errOut, "repository already exists") && !strings.Contains(errOut, "ya inicializado")) {
 		t.Fatalf("expected duplicate init error, got exit code %d: %s", code, errOut)
 	}
 

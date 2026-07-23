@@ -1,14 +1,20 @@
 package object_test
 
 import (
+	"errors"
 	"testing"
 	"time"
 
 	"minigit/internal/object"
 )
 
+const (
+	validHash1 = "1111111111111111111111111111111111111111111111111111111111111111"
+	validHash2 = "2222222222222222222222222222222222222222222222222222222222222222"
+)
+
 func TestBlobObject(t *testing.T) {
-	content := []byte("hello blob")
+	content := []byte("hello blob content for minigit object store test")
 	blob := object.NewBlob(content)
 	serialized := blob.Serialize()
 
@@ -23,12 +29,12 @@ func TestBlobObject(t *testing.T) {
 
 func TestTreeSortingAndDeterminism(t *testing.T) {
 	entries1 := []object.TreeEntry{
-		{Name: "b.txt", Hash: "hash2", Type: "blob", Mode: 0644},
-		{Name: "a.txt", Hash: "hash1", Type: "blob", Mode: 0644},
+		{Name: "b.txt", Hash: validHash2, Type: "blob", Mode: 0644},
+		{Name: "a.txt", Hash: validHash1, Type: "blob", Mode: 0644},
 	}
 	entries2 := []object.TreeEntry{
-		{Name: "a.txt", Hash: "hash1", Type: "blob", Mode: 0644},
-		{Name: "b.txt", Hash: "hash2", Type: "blob", Mode: 0644},
+		{Name: "a.txt", Hash: validHash1, Type: "blob", Mode: 0644},
+		{Name: "b.txt", Hash: validHash2, Type: "blob", Mode: 0644},
 	}
 
 	tree1 := object.NewTree(entries1)
@@ -50,9 +56,32 @@ func TestTreeSortingAndDeterminism(t *testing.T) {
 	}
 }
 
+func TestTreeValidationErrors(t *testing.T) {
+	// Invalid entry type
+	badTypePayload := object.EncodeObject(object.TypeTree, []byte("100644 invalidtype "+validHash1+" file.txt\n"))
+	_, err := object.DecodeTree(badTypePayload)
+	if !errors.Is(err, object.ErrInvalidHeader) {
+		t.Fatalf("expected ErrInvalidHeader for invalid entry type, got: %v", err)
+	}
+
+	// Invalid hash length
+	badHashPayload := object.EncodeObject(object.TypeTree, []byte("100644 blob short123 file.txt\n"))
+	_, err = object.DecodeTree(badHashPayload)
+	if !errors.Is(err, object.ErrInvalidHeader) {
+		t.Fatalf("expected ErrInvalidHeader for short entry hash, got: %v", err)
+	}
+
+	// Invalid mode octal
+	badModePayload := object.EncodeObject(object.TypeTree, []byte("999999 blob "+validHash1+" file.txt\n"))
+	_, err = object.DecodeTree(badModePayload)
+	if !errors.Is(err, object.ErrInvalidHeader) {
+		t.Fatalf("expected ErrInvalidHeader for invalid mode octal, got: %v", err)
+	}
+}
+
 func TestCommitObject(t *testing.T) {
 	fixedTime := time.Date(2026, 7, 22, 12, 0, 0, 0, time.UTC)
-	commit := object.NewCommit("treehash123", "parenthash456", "Author Name", "author@email.com", "Test commit message\nSecond line", fixedTime)
+	commit := object.NewCommit(validHash1, validHash2, "Author Name", "author@email.com", "Test commit message\nSecond line", fixedTime)
 
 	serialized := commit.Serialize()
 	decoded, err := object.DecodeCommit(serialized)
@@ -60,16 +89,68 @@ func TestCommitObject(t *testing.T) {
 		t.Fatalf("DecodeCommit failed: %v", err)
 	}
 
-	if decoded.Tree != "treehash123" {
-		t.Fatalf("expected tree treehash123, got %s", decoded.Tree)
+	if decoded.Tree != validHash1 {
+		t.Fatalf("expected tree %s, got %s", validHash1, decoded.Tree)
 	}
-	if decoded.Parent != "parenthash456" {
-		t.Fatalf("expected parent parenthash456, got %s", decoded.Parent)
+	if decoded.Parent != validHash2 {
+		t.Fatalf("expected parent %s, got %s", validHash2, decoded.Parent)
 	}
 	if decoded.AuthorName != "Author Name" || decoded.AuthorMail != "author@email.com" {
 		t.Fatalf("author mismatch")
 	}
 	if decoded.Message != "Test commit message\nSecond line" {
 		t.Fatalf("message mismatch: %s", decoded.Message)
+	}
+}
+
+func TestCommitValidationErrors(t *testing.T) {
+	// Missing tree
+	noTreeBody := []byte("author Author Name <author@email.com> 2026-07-22T12:00:00Z\n\nCommit without tree")
+	noTreePayload := object.EncodeObject(object.TypeCommit, noTreeBody)
+	_, err := object.DecodeCommit(noTreePayload)
+	if !errors.Is(err, object.ErrInvalidHeader) {
+		t.Fatalf("expected ErrInvalidHeader for commit missing tree, got: %v", err)
+	}
+
+	// Invalid tree hash (short)
+	shortTreeBody := []byte("tree short123\nauthor Author Name <author@email.com> 2026-07-22T12:00:00Z\n\nCommit with short tree")
+	shortTreePayload := object.EncodeObject(object.TypeCommit, shortTreeBody)
+	_, err = object.DecodeCommit(shortTreePayload)
+	if !errors.Is(err, object.ErrInvalidHeader) {
+		t.Fatalf("expected ErrInvalidHeader for short tree hash, got: %v", err)
+	}
+
+	// Invalid author format
+	badAuthorBody := []byte("tree " + validHash1 + "\nauthor Malformed Author Line\n\nCommit with bad author")
+	badAuthorPayload := object.EncodeObject(object.TypeCommit, badAuthorBody)
+	_, err = object.DecodeCommit(badAuthorPayload)
+	if !errors.Is(err, object.ErrInvalidHeader) {
+		t.Fatalf("expected ErrInvalidHeader for malformed author line, got: %v", err)
+	}
+}
+
+func TestDecodeObjectValidation(t *testing.T) {
+	// Missing null byte
+	_, _, _, err := object.DecodeObject([]byte("blob 10hello"))
+	if err == nil {
+		t.Fatalf("expected error for header missing null byte")
+	}
+
+	// Unknown object type
+	_, _, _, err = object.DecodeObject([]byte("invalidtype 5\x00hello"))
+	if err == nil {
+		t.Fatalf("expected error for unknown object type")
+	}
+
+	// Size mismatch
+	_, _, _, err = object.DecodeObject([]byte("blob 100\x00hello"))
+	if err == nil {
+		t.Fatalf("expected size mismatch error")
+	}
+
+	// Negative size
+	_, _, _, err = object.DecodeObject([]byte("blob -5\x00hello"))
+	if err == nil {
+		t.Fatalf("expected invalid size error")
 	}
 }

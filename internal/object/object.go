@@ -57,7 +57,7 @@ func DecodeObject(raw []byte) (ObjectType, int64, []byte, error) {
 	}
 
 	size, err := strconv.ParseInt(string(parts[1]), 10, 64)
-	if err != nil {
+	if err != nil || size < 0 {
 		return "", 0, nil, fmt.Errorf("%w: invalid size in header: %v", ErrInvalidHeader, err)
 	}
 

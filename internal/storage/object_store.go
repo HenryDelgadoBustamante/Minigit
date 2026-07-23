@@ -89,6 +89,12 @@ func (s *ObjectStore) ResolveHash(hashPrefix string) (string, error) {
 		return "", fmt.Errorf("%w: hash prefix length must be between 4 and 64 hex characters", ErrInvalidHashFormat)
 	}
 
+	for _, c := range hashPrefix {
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
+			return "", fmt.Errorf("%w: hash prefix contains non-hexadecimal character '%c'", ErrInvalidHashFormat, c)
+		}
+	}
+
 	if len(hashPrefix) == 64 {
 		dir := filepath.Join(s.objectsDir, hashPrefix[:2])
 		filePath := filepath.Join(dir, hashPrefix[2:])

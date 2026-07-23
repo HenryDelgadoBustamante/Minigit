@@ -74,7 +74,12 @@ func WriteHEAD(repoRoot string, head *HEAD) error {
 		return fmt.Errorf("%w: unknown HEAD type", ErrInvalidHEAD)
 	}
 
-	func NewHEAD(branch string) *HEAD {
-    return &HEAD{Type: HEADTypeBranch, Branch: branch}
+	if err := storage.WriteFileAtomic(headPath, []byte(content), 0644); err != nil {
+		return fmt.Errorf("failed to write HEAD: %w", err)
+	}
+	return nil
 }
+
+func NewHEAD(branch string) *HEAD {
+	return &HEAD{Type: HEADTypeBranch, Branch: branch}
 }

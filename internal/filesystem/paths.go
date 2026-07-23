@@ -103,3 +103,29 @@ func GetFileMode(info os.FileInfo) uint32 {
 	}
 	return 0644
 }
+
+// IsWritable checks whether a directory path (or its parent if it does not yet exist) is writable.
+func IsWritable(dirPath string) error {
+	info, err := os.Stat(dirPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			parent := filepath.Dir(dirPath)
+			if parent == dirPath {
+				return err
+			}
+			return IsWritable(parent)
+		}
+		return err
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("path is not a directory: %s", dirPath)
+	}
+	tmpFile, err := os.CreateTemp(dirPath, ".minigit-write-test-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmpFile.Name()
+	tmpFile.Close()
+	os.Remove(tmpName)
+	return nil
+}

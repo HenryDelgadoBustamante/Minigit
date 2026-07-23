@@ -171,17 +171,128 @@ Repository
 
 ---
 
-## 📦 Formato de Objetos y Hashing
+## 📦 Almacenamiento Direccionable por Contenido (Object Store)
 
-Cada objeto se almacena comprimido en `.minigit/objects/ab/cdef1234...` con la cabecera:
+MiniGit implementa un almacenamiento inmutable direccionado por contenido en `.minigit/objects/`.
+
+### 1. Generación de Hashes SHA-256
+Cada objeto en MiniGit (`blob`, `tree`, `commit`) se identifica unívocamente mediante un hash **SHA-256** de 64 caracteres hexadecimales en minúsculas. El hash se calcula sobre el contenido binario serializado completo, compuesto por la cabecera estándar de Git y el cuerpo:
 
 ```text
 <tipo> <tamaño>\x00<contenido>
 ```
 
-- **Blob**: `blob <tamaño>\x00<datos-del-archivo>`
-- **Tree**: `tree <tamaño>\x00<modo> <tipo> <hash> <nombre>\n...` (ordenado alfabéticamente de forma determinista).
-- **Commit**: `commit <tamaño>\x00tree <hash>\nparent <hash>\nauthor <nombre> <<email>> <timestamp>\n\n<mensaje>`
+- **Determinismo**: El mismo contenido genera exactamente el mismo hash de 64 caracteres, garantizando desduplicación absoluta.
+- **Tipos de objetos**:
+  - **Blob**: `blob <tamaño>\x00<datos-del-archivo>`
+  - **Tree**: `tree <tamaño>\x00<modo> <tipo> <hash> <nombre>\n...` (ordenado deterministamente).
+  - **Commit**: `commit <tamaño>\x00tree <hash>\nparent <hash>\nauthor <nombre> <<email>> <timestamp>\n\n<mensaje>`
+
+### 2. Estructura de Almacenamiento y Desduplicación
+Los objetos se persisten físicamente utilizando los dos primeros caracteres del hash como nombre del subdirectorio y los 62 caracteres restantes como el nombre del archivo:
+
+```text
+.minigit/objects/
+├── 4b/
+│   └── 825dc642cb6eb9a060e54bf8d69288fbee4904ce8e32906b3a0f7...
+└── e3/
+    └── b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b...
+```
+
+- **Desduplicación**: Antes de escribir un nuevo objeto, `ObjectStore` verifica si la trayectoria `.minigit/objects/xx/yyyy...` ya existe. Si el archivo ya está en disco, se omite la escritura.
+- **Inmutabilidad**: Los objetos se guardan con permisos de solo lectura (`0444`) para prevenir modificaciones accidentales.
+
+### 3. Compresión zlib
+Para optimizar el espacio en disco, todo objeto es comprimido mediante `zlib` antes de persistirlo en el sistema de archivos:
+- **Escritura**: El payload completo (`cabecera + cuerpo`) pasa por `zlib.Writer` y se escribe de manera atómica (`WriteFileAtomic`).
+- **Lectura**: Al recuperar un objeto, se descomprime mediante `zlib.Reader`. Si los datos en disco están truncados o no son un flujo `zlib` válido, se detecta inmediatamente un error de corrupción.
+
+### 4. Recuperación y Resolución de Hashes Cortos
+MiniGit permite recuperar objetos proporcionando:
+- El hash SHA-256 completo (64 caracteres).
+- Un prefijo hexadecimal abreviado (mínimo 4 caracteres). Si el prefijo coincide con un único objeto en el subdirectorio `.minigit/objects/xx/`, se resuelve de forma transparente al hash completo. Si coincide con múltiples objetos, se reporta un error de hash ambiguo.
+
+### 5. Verificación de Integridad y Detección de Errores
+- **Detección de objetos inexistentes**: Si se solicita un hash que no está presente en el repositorio, MiniGit retorna un error claro `ErrObjectNotFound` evitando fallos o colapsos del sistema.
+- **Detección de objetos corruptos**: Durante cada lectura (`ReadObject`), MiniGit ejecuta una verificación de integridad en dos pasos:
+  1. **Descompresión zlib**: Valida el formato y la integridad del archivo comprimido.
+  2. **Recálculo de checksum SHA-256**: Recalcula el SHA-256 sobre los datos descomprimidos y los compara contra el hash esperado. Si existe cualquier discrepancia, no se entrega información alterada y se reporta inmediatamente un error de integridad (`ErrCorruptObject`).
+
+### 6. Modelo de Objetos y Grafo de Relaciones
+
+MiniGit organiza los datos del usuario mediante un grafo acíclico dirigido (DAG) de tres objetos inmutables principales:
+
+```text
+               ┌──────────────┐
+               │    Commit    │  (Autor, fecha, mensaje)
+               └──────┬───────┘
+                      │ puntos a
+                      ▼
+               ┌──────────────┐
+               │  Tree Raíz   │  (Directorio principal)
+               └──────┬───────┘
+                      ├───────────────┐
+                      ▼               ▼
+               ┌──────────────┐┌──────────────┐
+               │   Subtree    ││  Blob (file) │  (Contenido crudo)
+               └──────┬───────┘└──────────────┘
+                      ▼
+               ┌──────────────┐
+               │  Blob (file) │
+               └──────────────┘
+```
+
+#### A. Objeto Blob (`blob`)
+Almacena únicamente el contenido crudo de un archivo. No conserva metadatos como el nombre o los permisos del archivo (estos son gestionados por el objeto `Tree`).
+
+- **Serialización determinista**:
+  ```text
+  blob <tamaño_bytes>\x00<contenido_crudo_del_archivo>
+  ```
+- **Ejemplo**: Un archivo con `"Hola MiniGit"` (12 bytes) se serializa como:
+  ```text
+  blob 12\x00Hola MiniGit
+  ```
+
+#### B. Objeto Tree (`tree`)
+Representa la estructura de un directorio. Almacena punteros a objetos `blob` (archivos) y otros `tree` (subdirectorios), asociándoles un nombre de archivo y modo de permisos octal (`100644` para archivos estándar, `100755` para ejecutables, `040000` para subdirectorios).
+
+- **Serialización determinista**: Las entradas se ordenan alfabéticamente por `Name` (y secuencialmente por `Hash` en caso de nombres idénticos).
+  ```text
+  tree <tamaño_bytes>\x00<modo> <tipo> <hash_sha256> <nombre>\n...
+  ```
+- **Ejemplo**:
+  ```text
+  tree 118\x00100644 blob e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 archivo.txt
+  100755 blob 4b825dc642cb6eb9a060e54bf8d69288fbee4904ce8e32906b3a0f7902d0eb2d script.sh
+  ```
+
+#### C. Objeto Commit (`commit`)
+Captura una instantánea del estado del repositorio en un instante del tiempo. Contiene la referencia al `Tree` raíz, la referencia al commit `Parent` (si existe), los datos del autor (`Nombre <email> <RFC3339_timestamp>`) y el mensaje descriptivo.
+
+- **Serialización determinista**: Timestamps formateados estrictamente en UTC RFC3339 (`YYYY-MM-DDTHH:MM:SSZ`).
+  ```text
+  commit <tamaño_bytes>\x00tree <hash_tree_raiz>
+  parent <hash_commit_padre>
+  author <Nombre Autor> <<email>> <timestamp_utc_rfc3339>
+
+  <mensaje_del_commit>
+  ```
+- **Ejemplo**:
+  ```text
+  commit 215\x00tree 1111111111111111111111111111111111111111111111111111111111111111
+  parent 2222222222222222222222222222222222222222222222222222222222222222
+  author MiniGit User <user@minigit.local> 2026-07-22T23:45:00Z
+
+  Primer commit de prueba
+  ```
+
+#### D. Deserialización y Validaciones Estrictas
+Durante la deserialización (`DecodeBlob`, `DecodeTree`, `DecodeCommit`), MiniGit ejecuta validaciones en cascada:
+1. **Encabezado general (`DecodeObject`)**: Verifica el byte delimitador `\x00`, el formato `<tipo> <tamaño>`, que el tipo sea válido (`blob`, `tree`, `commit`), que el tamaño sea un entero no negativo (`size >= 0`), y que coincida exactamente con la longitud real del cuerpo.
+2. **Validación específica por tipo**:
+   - `DecodeTree` valida que el modo sea octal, el tipo sea `"blob"` o `"tree"`, y los hashes sean de 64 caracteres hex válidos.
+   - `DecodeCommit` valida la presencia obligatoria de la cabecera `tree`, el formato de autor con timestamp ISO/RFC3339 y la validez de los hashes hexadecimales de 64 caracteres.
 
 ---
 

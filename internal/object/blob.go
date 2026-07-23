@@ -9,22 +9,27 @@ type Blob struct {
 	Data []byte
 }
 
-// NewBlob creates a new Blob object.
+// NewBlob creates a new Blob object wrapping raw file bytes.
 func NewBlob(data []byte) *Blob {
-	return &Blob{Data: data}
+	if data == nil {
+		data = []byte{}
+	}
+	buf := make([]byte, len(data))
+	copy(buf, data)
+	return &Blob{Data: buf}
 }
 
-// Type returns Blob type.
+// Type returns ObjectType "blob".
 func (b *Blob) Type() ObjectType {
 	return TypeBlob
 }
 
-// Serialize encodes the blob into "<type> <size>\x00<data>".
+// Serialize encodes the blob into standard header + body: "blob <size>\x00<data>".
 func (b *Blob) Serialize() []byte {
 	return EncodeObject(TypeBlob, b.Data)
 }
 
-// DecodeBlob decodes raw payload bytes into a Blob struct.
+// DecodeBlob parses raw object bytes and returns a Blob struct.
 func DecodeBlob(raw []byte) (*Blob, error) {
 	objType, _, body, err := DecodeObject(raw)
 	if err != nil {
@@ -33,5 +38,7 @@ func DecodeBlob(raw []byte) (*Blob, error) {
 	if objType != TypeBlob {
 		return nil, fmt.Errorf("%w: expected blob, got %s", ErrTypeMismatch, objType)
 	}
-	return &Blob{Data: body}, nil
+	buf := make([]byte, len(body))
+	copy(buf, body)
+	return &Blob{Data: buf}, nil
 }
