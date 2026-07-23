@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 )
 
 type FileItem struct {
@@ -39,6 +40,14 @@ func WalkWorkingTree(repoRoot string, ignoreChecker IgnoreChecker) ([]FileItem, 
 		}
 
 		norm := NormalizePath(rel)
+
+		// Double-check: always reject internal paths regardless of ignore rules
+		if norm == ".minigit" || strings.HasPrefix(norm, ".minigit/") || norm == ".git" || strings.HasPrefix(norm, ".git/") {
+			if info.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
 
 		if ignoreChecker != nil && ignoreChecker.IsIgnored(norm, info.IsDir()) {
 			if info.IsDir() {

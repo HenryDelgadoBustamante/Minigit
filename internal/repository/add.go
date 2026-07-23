@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"minigit/internal/filesystem"
 	"minigit/internal/object"
@@ -104,11 +105,41 @@ func (r *Repository) addDirectoryRecursive(idx *Index, dirRelPath string) error 
 		if err != nil {
 			return err
 		}
+
+		// Reject symlinks pointing outside repo
+		if info.Mode()&os.ModeSymlink != 0 {
+			if err := filesystem.ValidateSymlink(path, r.Root); err != nil {
+				return fmt.Errorf("symlink rejected: %w", err)
+			}
+			// Safe symlink, resolve and continue
+			resolved, err := filepath.EvalSymlinks(path)
+			if err != nil {
+				return fmt.Errorf("failed to resolve symlink %s: %w", path, err)
+			}
+			resolvedInfo, err := os.Stat(resolved)
+			if err != nil {
+				return fmt.Errorf("failed to stat symlink target %s: %w", resolved, err)
+			}
+			if resolvedInfo.IsDir() {
+				return nil // Skip symlinked directories to avoid infinite loops
+			}
+			info = resolvedInfo
+		}
+
 		rel, err := filepath.Rel(r.Root, path)
 		if err != nil {
 			return err
 		}
 		norm := filesystem.NormalizePath(rel)
+
+		// Double-check: reject internal paths
+		if norm == ".minigit" || strings.HasPrefix(norm, ".minigit/") {
+			if info.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+
 		if r.Ignore.IsIgnored(norm, info.IsDir()) {
 			if info.IsDir() {
 				return filepath.SkipDir
@@ -126,6 +157,22 @@ func (r *Repository) addDirectoryRecursive(idx *Index, dirRelPath string) error 
 }
 
 func (r *Repository) stageSingleFile(idx *Index, normPath, absPath string, info os.FileInfo) error {
+	// Validate symlinks before reading
+	if info.Mode()&os.ModeSymlink != 0 {
+		if err := filesystem.ValidateSymlink(absPath, r.Root); err != nil {
+			return fmt.Errorf("symlink rejected for %s: %w", normPath, err)
+		}
+		resolved, err := filepath.EvalSymlinks(absPath)
+		if err != nil {
+			return fmt.Errorf("failed to resolve symlink %s: %w", normPath, err)
+		}
+		resolvedInfo, err := os.Stat(resolved)
+		if err != nil {
+			return fmt.Errorf("failed to stat symlink target for %s: %w", normPath, err)
+		}
+		info = resolvedInfo
+	}
+
 	data, err := os.ReadFile(absPath)
 	if err != nil {
 		return fmt.Errorf("reading file %s failed: %w", normPath, err)

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"minigit/internal/filesystem"
@@ -15,6 +16,11 @@ func (r *Repository) Restore(targetPath string, staged bool) error {
 	normPath, err := filesystem.ValidateRelativePath(targetPath, r.Root)
 	if err != nil {
 		return fmt.Errorf("invalid path for restore: %w", err)
+	}
+
+	// Prevent restoring files into .minigit directory
+	if normPath == ".minigit" || strings.HasPrefix(normPath, ".minigit/") {
+		return fmt.Errorf("cannot restore files into internal repository directory: %s", normPath)
 	}
 
 	headCommitHash, err := r.GetHeadCommitHash()

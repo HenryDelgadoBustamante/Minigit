@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 var ErrRepositoryNotFound = errors.New("not a minigit repository (or any of the parent directories): .minigit not found")
@@ -15,6 +16,11 @@ func DiscoverRepository(startDir string) (string, error) {
 	absStart, err := filepath.Abs(startDir)
 	if err != nil {
 		return "", fmt.Errorf("invalid path: %w", err)
+	}
+
+	// Validate startDir does not contain null bytes
+	if strings.Contains(absStart, "\x00") {
+		return "", fmt.Errorf("invalid path: null bytes detected")
 	}
 
 	curr := absStart

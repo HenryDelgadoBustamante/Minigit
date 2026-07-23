@@ -9,12 +9,12 @@ import (
 )
 
 var (
-	ErrAbsolutePath  = errors.New("absolute paths are forbidden")
-	ErrPathTraversal = errors.New("path traversal (..) is forbidden")
+	ErrAbsolutePath  = errors.New("absolute paths are forbidden: use paths relative to the repository root")
+	ErrPathTraversal = errors.New("path traversal (..) is forbidden: paths must stay within the repository")
 	ErrInternalPath  = errors.New("accessing internal repository paths (.minigit/.git) is forbidden")
-	ErrNullByte      = errors.New("null bytes in path are forbidden")
-	ErrOutsideRepo   = errors.New("path escapes repository root")
-	ErrUnsafeSymlink = errors.New("symlink points outside repository root")
+	ErrNullByte      = errors.New("null bytes in path are forbidden: invalid path encoding detected")
+	ErrOutsideRepo   = errors.New("path escapes repository root: operation blocked for security")
+	ErrUnsafeSymlink = errors.New("symlink points outside repository root: access denied")
 )
 
 // NormalizePath converts backslashes to forward slashes and cleans the path.
