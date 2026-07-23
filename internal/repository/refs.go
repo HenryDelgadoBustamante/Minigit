@@ -140,3 +140,13 @@ func ListBranches(repoRoot string) ([]string, error) {
 	sort.Strings(branches)
 	return branches, nil
 }
+
+// ListBranches returns sorted list of all branch names.
+func (r *Repository) ListBranches() ([]string, error) {
+	return ListBranches(r.Root)
+}
+
+// CreateBranch creates a new branch pointing to a commit hash if it doesn't already exist.
+func (r *Repository) CreateBranch(branchName, commitHash string) error {
+	return CreateBranch(r.Root, branchName, commitHash)
+}

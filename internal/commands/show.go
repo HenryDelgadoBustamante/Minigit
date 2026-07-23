@@ -2,26 +2,15 @@ package commands
 
 import (
 	"fmt"
-	"sort"
 	"strings"
 	"time"
 
-	"minigit/internal/object"
 	"minigit/internal/repository"
 )
 
 // RunShow shows detailed information for a specific commit hash.
 func RunShow(repo *repository.Repository, hashPrefix string) error {
-	if hashPrefix == "" {
-		// Default to HEAD commit
-		headHash, err := repo.GetHeadCommitHash()
-		if err != nil || headHash == "" {
-			return fmt.Errorf("no commit specified and HEAD has no commits yet")
-		}
-		hashPrefix = headHash
-	}
-
-	commitObj, fullHash, err := repo.GetCommitByHash(hashPrefix)
+	diff, commitObj, fullHash, err := repo.GetCommitDiff(hashPrefix)
 	if err != nil {
 		return err
 	}
@@ -39,55 +28,15 @@ func RunShow(repo *repository.Repository, hashPrefix string) error {
 	}
 	fmt.Println()
 
-	// Load tree map of current commit
-	currentTreeMap, err := repo.ReadTreeToMap(commitObj.Tree)
-	if err != nil {
-		return fmt.Errorf("failed to read commit tree: %w", err)
-	}
-
-	// Compare with parent commit if available
-	var parentTreeMap map[string]object.TreeEntry
-	if commitObj.Parent != "" {
-		parentCommit, _, err := repo.GetCommitByHash(commitObj.Parent)
-		if err == nil {
-			parentTreeMap, _ = repo.ReadTreeToMap(parentCommit.Tree)
-		}
-	}
-
-	if parentTreeMap == nil {
-		parentTreeMap = make(map[string]object.TreeEntry)
-	}
-
-	var added, modified, deleted []string
-
-	for path, currentEntry := range currentTreeMap {
-		parentEntry, inParent := parentTreeMap[path]
-		if !inParent {
-			added = append(added, path)
-		} else if parentEntry.Hash != currentEntry.Hash {
-			modified = append(modified, path)
-		}
-	}
-
-	for path := range parentTreeMap {
-		if _, inCurrent := currentTreeMap[path]; !inCurrent {
-			deleted = append(deleted, path)
-		}
-	}
-
-	sort.Strings(added)
-	sort.Strings(modified)
-	sort.Strings(deleted)
-
-	if len(added) > 0 || len(modified) > 0 || len(deleted) > 0 {
+	if len(diff.Added) > 0 || len(diff.Modified) > 0 || len(diff.Deleted) > 0 {
 		fmt.Println("Changes in this commit:")
-		for _, p := range added {
+		for _, p := range diff.Added {
 			fmt.Printf("  + %s\n", p)
 		}
-		for _, p := range modified {
+		for _, p := range diff.Modified {
 			fmt.Printf("  M %s\n", p)
 		}
-		for _, p := range deleted {
+		for _, p := range diff.Deleted {
 			fmt.Printf("  - %s\n", p)
 		}
 	}

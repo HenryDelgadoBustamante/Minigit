@@ -13,7 +13,7 @@ func RunBranch(repo *repository.Repository, branchName string) error {
 
 	if branchName == "" {
 		// List branches
-		branches, err := repository.ListBranches(repo.Root)
+		branches, err := repo.ListBranches()
 		if err != nil {
 			return err
 		}
@@ -45,7 +45,7 @@ func RunBranch(repo *repository.Repository, branchName string) error {
 		return fmt.Errorf("cannot create branch '%s': current branch has no commits yet", branchName)
 	}
 
-	if err := repository.CreateBranch(repo.Root, branchName, headCommitHash); err != nil {
+	if err := repo.CreateBranch(branchName, headCommitHash); err != nil {
 		return err
 	}
 

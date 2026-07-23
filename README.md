@@ -127,26 +127,47 @@ Set-Content -Path saludo.txt -Value "Hola mundo"
 
 ## 🏗 Arquitectura Interna
 
-El proyecto sigue una estructura limpia en capas dirigidas (Command Handler → Repository Domain → Object/Storage Domain → Filesystem):
+El proyecto sigue una arquitectura modular en capas dirigidas donde la interfaz de usuario se desacopla completamente de la lógica del dominio:
 
 ```text
-minigit/
-├── cmd/
-│   └── minigit/
-│       └── main.go          # Punto de entrada principal
-├── internal/
-│   ├── cli/                 # Parseo de argumentos y enrutamiento CLI
-│   ├── commands/            # Implementación de comandos (init, add, commit, etc.)
-│   ├── repository/          # Lógica de dominio, index, refs, HEAD, ignore y locks
-│   ├── object/              # Modelos de objetos inmutables (blob, tree, commit)
-│   ├── storage/             # Almacenamiento, compresión zlib, hashing SHA-256 y escrituras atómicas
-│   └── filesystem/          # Validaciones de seguridad de rutas y caminante de directorios
-├── minigit_integration_test.go # Pruebas de integración CLI de extremo a extremo
-├── Makefile
-├── README.md
-├── LICENSE
-└── .gitignore
+Usuario
+   │
+   ▼
+CLI
+   │
+   ▼
+Commands
+   │
+   ▼
+Repository
+   ├── Working Tree
+   ├── Index
+   ├── HEAD
+   ├── Refs
+   ├── Ignore
+   └── Object Store
+         │
+         ├── Object
+         ├── Storage
+         └── Filesystem
 ```
+
+### Responsabilidad de cada paquete
+
+- **`cli`**: Parseo de argumentos de línea de comandos, manejo de banderas generales y enrutamiento hacia la capa de comandos.
+- **`commands`**: Capa de presentación y adaptación CLI. Valida argumentos de comandos específicos, interpreta opciones de usuario, lee variables de entorno, invoca operaciones del paquete `repository` y da formato visible a la salida o errores.
+- **`repository`**: Núcleo del dominio de control de versiones. Coordina las operaciones entre el **Working Tree**, **Index**, **HEAD**, **Refs**, **Ignore** y el **Object Store**.
+- **`object`**: Modelos de dominio e inmutabilidad de objetos (`Blob`, `Tree`, `Commit`).
+- **`storage`**: Almacenamiento físico de objetos, compresión `zlib`, hashing SHA-256 y escrituras atómicas.
+- **`filesystem`**: Operaciones físicas seguras del sistema de archivos, validación estricta contra Path Traversal y recorrido recursivo de directorios.
+
+### Conceptos clave del repositorio
+
+1. **Working Tree (Árbol de Trabajo)**: Los archivos y directorios físicos presentes en el disco del usuario.
+2. **Index (Área de Preparación / Staging)**: Caché atómica intermedia (`.minigit/index`) que registra los estados preparados listos para ser capturados en el próximo commit.
+3. **HEAD**: Puntero principal que indica el estado actual del repositorio, ya sea hacia una rama activa (`refs/heads/<branch>`) o en estado *detached HEAD* apuntando directamente a un hash de commit.
+4. **Refs**: Referencias persistentes en el disco (`.minigit/refs/heads/*`) que asocian nombres de ramas con hashes de commits.
+5. **Object Store**: Almacén de contenido inmutable (`.minigit/objects/`) donde cada archivo (`blob`), estructura de directorio (`tree`) e instantánea (`commit`) se guarda comprimido y direccionado por su SHA-256.
 
 ---
 
