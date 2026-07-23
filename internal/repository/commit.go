@@ -56,8 +56,21 @@ func (r *Repository) Commit(message, authorName, authorEmail string) (*CommitRes
 		return nil, fmt.Errorf("failed to build tree object: %w", err)
 	}
 
+	// Validate tree existence & structure in Merkle graph
+	if err := r.ValidateTreeRecursively(treeHash, nil, 1); err != nil {
+		return nil, fmt.Errorf("invalid tree for commit: %w", err)
+	}
+
 	// Prevent creating commit if there are no changes relative to HEAD commit
 	if parentCommitHash != "" {
+		parentType, _, err := r.GetObjectType(parentCommitHash)
+		if err != nil {
+			return nil, fmt.Errorf("parent commit %s not found: %w", parentCommitHash, err)
+		}
+		if parentType != object.TypeCommit {
+			return nil, fmt.Errorf("%w: parent %s is of type %s", ErrObjectTypeMismatch, parentCommitHash, parentType)
+		}
+
 		parentCommit, _, err := r.GetCommitByHash(parentCommitHash)
 		if err != nil {
 			return nil, err

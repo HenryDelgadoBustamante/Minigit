@@ -291,8 +291,42 @@ Captura una instantánea del estado del repositorio en un instante del tiempo. C
 Durante la deserialización (`DecodeBlob`, `DecodeTree`, `DecodeCommit`), MiniGit ejecuta validaciones en cascada:
 1. **Encabezado general (`DecodeObject`)**: Verifica el byte delimitador `\x00`, el formato `<tipo> <tamaño>`, que el tipo sea válido (`blob`, `tree`, `commit`), que el tamaño sea un entero no negativo (`size >= 0`), y que coincida exactamente con la longitud real del cuerpo.
 2. **Validación específica por tipo**:
-   - `DecodeTree` valida que el modo sea octal, el tipo sea `"blob"` o `"tree"`, y los hashes sean de 64 caracteres hex válidos.
+   - `DecodeTree` valida que el modo sea octal, el tipo sea `"blob"` o `"tree"`, y los hashes sean de 64 caracteres hex válidos. Rechaza nombres inválidos (`..`, `/`, vacíos) y entradas duplicadas (`ErrDuplicateEntry`).
    - `DecodeCommit` valida la presencia obligatoria de la cabecera `tree`, el formato de autor con timestamp ISO/RFC3339 y la validez de los hashes hexadecimales de 64 caracteres.
+
+### 7. Grafo de Merkle y Propagación de Hashes
+
+MiniGit fortalece la estructura del Grafo de Merkle asegurando la inmutabilidad de los objetos y la propagación exacta de cambios:
+
+```text
+Commit B
+   │
+   ├── parent → Commit A
+   └── tree → Root Tree
+               ├── blob → README.md
+               ├── blob → main.go
+               └── tree → docs
+                           ├── blob → arquitectura.md
+                           └── tree → utils
+                                       └── blob → hash.go
+```
+
+- **Blobs**: Almacenan exactamente el contenido binario del archivo. Dos archivos idénticos en distintas rutas comparten el mismo hash de Blob.
+- **Trees**: Almacenan entradas con nombre, modo, tipo (`blob` o `tree`) y hash SHA-256. Las entradas se serializan en un orden determinista y estable.
+- **Commits**: Enlazan la instantánea actual mediante el hash del `tree` raíz y registran la historia mediante el puntero `parent` hacia el commit anterior.
+- **Propagación de Hashes**:
+  ```text
+  Cambio en archivo
+        ↓
+  Nuevo hash de Blob
+        ↓
+  Nuevo hash del Tree que lo contiene
+        ↓
+  Nuevo hash de los Trees padres
+        ↓
+  Nuevo hash del Commit
+  ```
+- **Reutilización e Inmutabilidad**: Los objetos existentes no se modifican. Si un archivo o subdirectorio no sufre cambios entre commits, los objetos `tree` reutilizan la referencia al hash existente.
 
 ---
 

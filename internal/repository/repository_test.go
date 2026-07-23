@@ -4,8 +4,10 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
+	"minigit/internal/object"
 	"minigit/internal/repository"
 )
 
@@ -98,5 +100,222 @@ func TestBranchNameValidation(t *testing.T) {
 		if err := repository.ValidateBranchName(name); err != nil {
 			t.Fatalf("expected valid branch name '%s', got error: %v", name, err)
 		}
+	}
+}
+
+func TestMerkleGraphPropagationAndImmutability(t *testing.T) {
+	// 1. Inicializar repositorio
+	repoDir := t.TempDir()
+	if _, err := repository.InitRepository(repoDir); err != nil {
+		t.Fatalf("InitRepository failed: %v", err)
+	}
+	repo := repository.OpenRepository(repoDir)
+
+	// 2. Crear los archivos
+	readmePath := filepath.Join(repoDir, "README.md")
+	mainPath := filepath.Join(repoDir, "src", "main.go")
+	hashPath := filepath.Join(repoDir, "src", "utils", "hash.go")
+	docsPath := filepath.Join(repoDir, "docs", "manual.md")
+
+	os.MkdirAll(filepath.Dir(mainPath), 0755)
+	os.MkdirAll(filepath.Dir(hashPath), 0755)
+	os.MkdirAll(filepath.Dir(docsPath), 0755)
+
+	os.WriteFile(readmePath, []byte("# Proyecto Merkle"), 0644)
+	os.WriteFile(mainPath, []byte("package main\nfunc main() {}"), 0644)
+	os.WriteFile(hashPath, []byte("package utils\nfunc Hash() {}"), 0644)
+	os.WriteFile(docsPath, []byte("# Manual"), 0644)
+
+	// 3. Ejecutar add
+	if err := repo.Add([]string{"."}); err != nil {
+		t.Fatalf("Add failed: %v", err)
+	}
+
+	// 4. Crear commit inicial
+	res1, err := repo.Commit("Commit inicial", "Tester", "test@minigit.local")
+	if err != nil {
+		t.Fatalf("Commit 1 failed: %v", err)
+	}
+
+	// 5. Leer el commit almacenado
+	commit1, _, err := repo.GetCommitByHash(res1.Hash)
+	if err != nil {
+		t.Fatalf("GetCommitByHash 1 failed: %v", err)
+	}
+
+	// 6. Obtener tree raíz y recorrer subtrees
+	treeMap1, err := repo.ReadTreeToMap(commit1.Tree)
+	if err != nil {
+		t.Fatalf("ReadTreeToMap 1 failed: %v", err)
+	}
+
+	if len(treeMap1) != 4 {
+		t.Fatalf("expected 4 files in commit 1 tree, got %d", len(treeMap1))
+	}
+
+	readmeBlobHash1 := treeMap1["README.md"].Hash
+	mainBlobHash1 := treeMap1["src/main.go"].Hash
+	hashBlobHash1 := treeMap1["src/utils/hash.go"].Hash
+	docsBlobHash1 := treeMap1["docs/manual.md"].Hash
+
+	// 7. Validar contenido de blobs recuperados
+	rawBlob, _, err := repo.Objects.ReadObject(hashBlobHash1)
+	if err != nil {
+		t.Fatalf("failed reading hash.go blob: %v", err)
+	}
+	if !strings.Contains(string(rawBlob), "package utils") {
+		t.Fatalf("recovered blob data mismatch: %s", string(rawBlob))
+	}
+
+	// Recopilar hashes de subtrees en el commit 1
+	rootTreeRaw1, _, _ := repo.Objects.ReadObject(commit1.Tree)
+	rootTreeObj1, _ := object.DecodeTree(rootTreeRaw1)
+	var srcTreeHash1, docsTreeHash1 string
+	for _, entry := range rootTreeObj1.Entries {
+		if entry.Name == "src" {
+			srcTreeHash1 = entry.Hash
+		} else if entry.Name == "docs" {
+			docsTreeHash1 = entry.Hash
+		}
+	}
+
+	srcTreeRaw1, _, _ := repo.Objects.ReadObject(srcTreeHash1)
+	srcTreeObj1, _ := object.DecodeTree(srcTreeRaw1)
+	var utilsTreeHash1 string
+	for _, entry := range srcTreeObj1.Entries {
+		if entry.Name == "utils" {
+			utilsTreeHash1 = entry.Hash
+		}
+	}
+
+	// 10. Modificar únicamente src/utils/hash.go
+	os.WriteFile(hashPath, []byte("package utils\nfunc Hash() { /* cambio */ }"), 0644)
+
+	// Add y Commit 2
+	if err := repo.Add([]string{"src/utils/hash.go"}); err != nil {
+		t.Fatalf("Add 2 failed: %v", err)
+	}
+
+	res2, err := repo.Commit("Modificar hash.go", "Tester", "test@minigit.local")
+	if err != nil {
+		t.Fatalf("Commit 2 failed: %v", err)
+	}
+
+	commit2, _, err := repo.GetCommitByHash(res2.Hash)
+	if err != nil {
+		t.Fatalf("GetCommitByHash 2 failed: %v", err)
+	}
+
+	treeMap2, err := repo.ReadTreeToMap(commit2.Tree)
+	if err != nil {
+		t.Fatalf("ReadTreeToMap 2 failed: %v", err)
+	}
+
+	hashBlobHash2 := treeMap2["src/utils/hash.go"].Hash
+	readmeBlobHash2 := treeMap2["README.md"].Hash
+	mainBlobHash2 := treeMap2["src/main.go"].Hash
+	docsBlobHash2 := treeMap2["docs/manual.md"].Hash
+
+	rootTreeRaw2, _, _ := repo.Objects.ReadObject(commit2.Tree)
+	rootTreeObj2, _ := object.DecodeTree(rootTreeRaw2)
+	var srcTreeHash2, docsTreeHash2 string
+	for _, entry := range rootTreeObj2.Entries {
+		if entry.Name == "src" {
+			srcTreeHash2 = entry.Hash
+		} else if entry.Name == "docs" {
+			docsTreeHash2 = entry.Hash
+		}
+	}
+
+	srcTreeRaw2, _, _ := repo.Objects.ReadObject(srcTreeHash2)
+	srcTreeObj2, _ := object.DecodeTree(srcTreeRaw2)
+	var utilsTreeHash2 string
+	for _, entry := range srcTreeObj2.Entries {
+		if entry.Name == "utils" {
+			utilsTreeHash2 = entry.Hash
+		}
+	}
+
+	// 12. Confirmar propagación de hashes
+	if hashBlobHash1 == hashBlobHash2 {
+		t.Fatalf("modified blob should have a new hash")
+	}
+	if utilsTreeHash1 == utilsTreeHash2 {
+		t.Fatalf("subtree src/utils should have a new hash")
+	}
+	if srcTreeHash1 == srcTreeHash2 {
+		t.Fatalf("subtree src should have a new hash")
+	}
+	if commit1.Tree == commit2.Tree {
+		t.Fatalf("root tree should have a new hash")
+	}
+	if res1.Hash == res2.Hash {
+		t.Fatalf("commit 2 should have a new hash")
+	}
+
+	// 17. Confirmar inmutabilidad de objetos no modificados
+	if readmeBlobHash1 != readmeBlobHash2 {
+		t.Fatalf("unmodified README.md blob hash should remain identical")
+	}
+	if mainBlobHash1 != mainBlobHash2 {
+		t.Fatalf("unmodified main.go blob hash should remain identical")
+	}
+	if docsBlobHash1 != docsBlobHash2 {
+		t.Fatalf("unmodified docs/manual.md blob hash should remain identical")
+	}
+	if docsTreeHash1 != docsTreeHash2 {
+		t.Fatalf("unmodified docs tree hash should remain identical")
+	}
+
+	// 18. Confirmar puntero al padre
+	if commit2.Parent != res1.Hash {
+		t.Fatalf("commit 2 parent should point to commit 1 (%s), got %s", res1.Hash, commit2.Parent)
+	}
+
+	// Validar grafo del commit 2
+	if err := repo.ValidateCommitGraph(res2.Hash); err != nil {
+		t.Fatalf("ValidateCommitGraph failed for commit 2: %v", err)
+	}
+}
+
+func TestMerkleGraphValidationErrors(t *testing.T) {
+	repoDir := t.TempDir()
+	repository.InitRepository(repoDir)
+	repo := repository.OpenRepository(repoDir)
+
+	// Validar árbol con referencia a objeto inexistente
+	badEntry := object.TreeEntry{
+		Name: "missing.txt",
+		Type: "blob",
+		Mode: 0644,
+		Hash: "9999999999999999999999999999999999999999999999999999999999999999",
+	}
+	badTree := object.NewTree([]object.TreeEntry{badEntry})
+	badTreeHash, err := repo.Objects.WriteObject(badTree.Serialize())
+	if err != nil {
+		t.Fatalf("WriteObject failed: %v", err)
+	}
+
+	err = repo.ValidateTreeRecursively(badTreeHash, nil, 1)
+	if err == nil {
+		t.Fatalf("expected error for tree referencing non-existent object")
+	}
+
+	// Validar inconsistencia de tipo: entrada declarada blob apuntando a tree
+	validSubTree := object.NewTree(nil)
+	validSubTreeHash, _ := repo.Objects.WriteObject(validSubTree.Serialize())
+
+	mismatchedEntry := object.TreeEntry{
+		Name: "wrong_type.txt",
+		Type: "blob", // Declarado como blob pero hash es un tree
+		Mode: 0644,
+		Hash: validSubTreeHash,
+	}
+	mismatchedTree := object.NewTree([]object.TreeEntry{mismatchedEntry})
+	mismatchedTreeHash, _ := repo.Objects.WriteObject(mismatchedTree.Serialize())
+
+	err = repo.ValidateTreeRecursively(mismatchedTreeHash, nil, 1)
+	if err == nil || !strings.Contains(err.Error(), "type mismatch") {
+		t.Fatalf("expected type mismatch error, got: %v", err)
 	}
 }

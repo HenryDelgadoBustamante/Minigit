@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"errors"
 	"fmt"
 	"path/filepath"
 	"sort"
@@ -136,6 +137,61 @@ func (r *Repository) buildSubTree(prefix string, entries []IndexEntry) (string, 
 	return r.Objects.WriteObject(treeObj.Serialize())
 }
 
+var (
+	ErrObjectTypeMismatch  = errors.New("object type mismatch in Merkle graph")
+	ErrCyclicTreeReference = errors.New("cyclic tree reference detected")
+	ErrExcessiveTreeDepth  = errors.New("excessive tree depth limit exceeded")
+)
+
+const maxTreeDepth = 100
+
+// GetObjectType reads and unpacks an object to inspect its actual ObjectType without trusting tree metadata.
+func (r *Repository) GetObjectType(hash string) (object.ObjectType, []byte, error) {
+	raw, _, err := r.Objects.ReadObject(hash)
+	if err != nil {
+		return "", nil, err
+	}
+	objType, _, body, err := object.DecodeObject(raw)
+	if err != nil {
+		return "", nil, err
+	}
+	return objType, body, nil
+}
+
+// ValidateTreeRecursively validates the integrity, structure, object types, and absence of cycles in a tree graph.
+func (r *Repository) ValidateTreeRecursively(treeHash string, visited map[string]bool, depth int) error {
+	if visited == nil {
+		visited = make(map[string]bool)
+	}
+	dummyMap := make(map[string]object.TreeEntry)
+	return r.traverseTree("", treeHash, dummyMap, visited, depth)
+}
+
+// ValidateCommitGraph validates that a commit points to a valid tree and valid parent commit.
+func (r *Repository) ValidateCommitGraph(commitHash string) error {
+	commitObj, _, err := r.GetCommitByHash(commitHash)
+	if err != nil {
+		return fmt.Errorf("get commit %s: %w", commitHash, err)
+	}
+
+	visited := make(map[string]bool)
+	if err := r.ValidateTreeRecursively(commitObj.Tree, visited, 1); err != nil {
+		return fmt.Errorf("commit %s tree %s invalid: %w", commitHash, commitObj.Tree, err)
+	}
+
+	if commitObj.Parent != "" {
+		parentType, _, err := r.GetObjectType(commitObj.Parent)
+		if err != nil {
+			return fmt.Errorf("commit %s parent %s not found: %w", commitHash, commitObj.Parent, err)
+		}
+		if parentType != object.TypeCommit {
+			return fmt.Errorf("%w: commit %s parent %s is of type %s", ErrObjectTypeMismatch, commitHash, commitObj.Parent, parentType)
+		}
+	}
+
+	return nil
+}
+
 // ReadTreeToMap recursively traverses a tree object and maps relative path -> TreeEntry.
 func (r *Repository) ReadTreeToMap(treeHash string) (map[string]object.TreeEntry, error) {
 	result := make(map[string]object.TreeEntry)
@@ -143,7 +199,8 @@ func (r *Repository) ReadTreeToMap(treeHash string) (map[string]object.TreeEntry
 		return result, nil
 	}
 
-	err := r.traverseTree("", treeHash, result)
+	visited := make(map[string]bool)
+	err := r.traverseTree("", treeHash, result, visited, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -151,10 +208,27 @@ func (r *Repository) ReadTreeToMap(treeHash string) (map[string]object.TreeEntry
 	return result, nil
 }
 
-func (r *Repository) traverseTree(prefix string, treeHash string, result map[string]object.TreeEntry) error {
+func (r *Repository) traverseTree(prefix string, treeHash string, result map[string]object.TreeEntry, visited map[string]bool, depth int) error {
+	if depth > maxTreeDepth {
+		return fmt.Errorf("%w: depth %d at %s", ErrExcessiveTreeDepth, depth, treeHash)
+	}
+	if visited[treeHash] {
+		return fmt.Errorf("%w: %s", ErrCyclicTreeReference, treeHash)
+	}
+	visited[treeHash] = true
+	defer func() { visited[treeHash] = false }()
+
 	raw, _, err := r.Objects.ReadObject(treeHash)
 	if err != nil {
 		return fmt.Errorf("failed to read tree %s: %w", treeHash, err)
+	}
+
+	objType, _, _, err := object.DecodeObject(raw)
+	if err != nil {
+		return fmt.Errorf("failed to decode object %s: %w", treeHash, err)
+	}
+	if objType != object.TypeTree {
+		return fmt.Errorf("%w: expected tree for %s, got %s", ErrObjectTypeMismatch, treeHash, objType)
 	}
 
 	treeObj, err := object.DecodeTree(raw)
@@ -168,11 +242,22 @@ func (r *Repository) traverseTree(prefix string, treeHash string, result map[str
 			relPath = prefix + "/" + entry.Name
 		}
 
+		targetType, _, err := r.GetObjectType(entry.Hash)
+		if err != nil {
+			return fmt.Errorf("referenced object %s (%s) in tree %s not found: %w", entry.Hash, relPath, treeHash, err)
+		}
+
 		if entry.Type == "blob" {
+			if targetType != object.TypeBlob {
+				return fmt.Errorf("%w: entry '%s' declared as blob points to %s (%s)", ErrObjectTypeMismatch, relPath, targetType, entry.Hash)
+			}
 			entry.Path = relPath
 			result[relPath] = entry
 		} else if entry.Type == "tree" {
-			if err := r.traverseTree(relPath, entry.Hash, result); err != nil {
+			if targetType != object.TypeTree {
+				return fmt.Errorf("%w: entry '%s' declared as tree points to %s (%s)", ErrObjectTypeMismatch, relPath, targetType, entry.Hash)
+			}
+			if err := r.traverseTree(relPath, entry.Hash, result, visited, depth+1); err != nil {
 				return err
 			}
 		}

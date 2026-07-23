@@ -116,10 +116,10 @@ func DecodeCommit(raw []byte) (*Commit, error) {
 		return nil, fmt.Errorf("%w: commit missing tree reference", ErrInvalidHeader)
 	}
 	if !isHex64(commit.Tree) {
-		return nil, fmt.Errorf("%w: invalid tree hash in commit '%s'", ErrInvalidHeader, commit.Tree)
+		return nil, fmt.Errorf("%w: invalid tree hash in commit '%s'", ErrInvalidHash, commit.Tree)
 	}
 	if commit.Parent != "" && !isHex64(commit.Parent) {
-		return nil, fmt.Errorf("%w: invalid parent hash in commit '%s'", ErrInvalidHeader, commit.Parent)
+		return nil, fmt.Errorf("%w: invalid parent hash in commit '%s'", ErrInvalidHash, commit.Parent)
 	}
 
 	return commit, nil

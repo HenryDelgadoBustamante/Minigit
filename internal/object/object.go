@@ -16,9 +16,12 @@ const (
 )
 
 var (
-	ErrInvalidHeader = errors.New("invalid object header")
-	ErrTypeMismatch  = errors.New("object type mismatch")
-	ErrSizeMismatch  = errors.New("object size mismatch")
+	ErrInvalidHeader    = errors.New("invalid object header")
+	ErrTypeMismatch     = errors.New("object type mismatch")
+	ErrSizeMismatch     = errors.New("object size mismatch")
+	ErrDuplicateEntry   = errors.New("duplicate entry in tree object")
+	ErrInvalidEntryName = errors.New("invalid entry name in tree object")
+	ErrInvalidHash      = errors.New("invalid hash format in object")
 )
 
 // Object represents a Git-style immutable object.

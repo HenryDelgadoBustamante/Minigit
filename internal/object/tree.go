@@ -70,6 +70,7 @@ func DecodeTree(raw []byte) (*Tree, error) {
 	lines := strings.Split(string(body), "\n")
 	var entries []TreeEntry
 
+	seenNames := make(map[string]bool)
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
 		if line == "" {
@@ -92,18 +93,23 @@ func DecodeTree(raw []byte) (*Tree, error) {
 
 		hash := parts[2]
 		if len(hash) != 64 {
-			return nil, fmt.Errorf("%w: invalid tree entry hash length '%s'", ErrInvalidHeader, hash)
+			return nil, fmt.Errorf("%w: invalid tree entry hash length '%s'", ErrInvalidHash, hash)
 		}
 		for _, c := range hash {
 			if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
-				return nil, fmt.Errorf("%w: non-hex character in tree entry hash '%s'", ErrInvalidHeader, hash)
+				return nil, fmt.Errorf("%w: non-hex character in tree entry hash '%s'", ErrInvalidHash, hash)
 			}
 		}
 
 		name := parts[3]
-		if name == "" {
-			return nil, fmt.Errorf("%w: empty name in tree entry", ErrInvalidHeader)
+		if name == "" || name == "." || name == ".." || strings.ContainsAny(name, "/\\\x00") {
+			return nil, fmt.Errorf("%w: invalid entry name '%s'", ErrInvalidEntryName, name)
 		}
+
+		if seenNames[name] {
+			return nil, fmt.Errorf("%w: duplicate tree entry '%s'", ErrDuplicateEntry, name)
+		}
+		seenNames[name] = true
 
 		entries = append(entries, TreeEntry{
 			Mode: uint32(mode),
