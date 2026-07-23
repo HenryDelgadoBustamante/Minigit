@@ -1,6 +1,7 @@
 package storage_test
 
 import (
+	"bytes"
 	"errors"
 	"os"
 	"path/filepath"
@@ -161,5 +162,155 @@ func TestCorruptObjectDetection(t *testing.T) {
 	_, _, err = store.ReadObject(hash)
 	if !errors.Is(err, storage.ErrCorruptObject) {
 		t.Fatalf("expected ErrCorruptObject for hash mismatch, got: %v", err)
+	}
+}
+
+func TestObjectStoreRoundTrip(t *testing.T) {
+	tmpDir := t.TempDir()
+	store := storage.NewObjectStore(tmpDir)
+
+	testPayloads := [][]byte{
+		[]byte("blob 11\x00hello world"),
+		[]byte("tree 0\x00"),
+		[]byte("commit 100\x00tree abc123\nparent def456\nauthor Test <test@test.com> 2026-07-23T12:00:00Z\n\nTest message"),
+		{0x00, 0xFF, 0xFE, 0xFD, 0x12, 0x34},
+		bytes.Repeat([]byte("X"), 50000),
+	}
+
+	for i, payload := range testPayloads {
+		hash, err := store.WriteObject(payload)
+		if err != nil {
+			t.Fatalf("RoundTrip[%d]: WriteObject failed: %v", i, err)
+		}
+
+		readData, fullHash, err := store.ReadObject(hash)
+		if err != nil {
+			t.Fatalf("RoundTrip[%d]: ReadObject failed: %v", i, err)
+		}
+
+		if fullHash != hash {
+			t.Fatalf("RoundTrip[%d]: hash mismatch: expected %s, got %s", i, hash, fullHash)
+		}
+
+		if string(readData) != string(payload) {
+			t.Fatalf("RoundTrip[%d]: payload mismatch", i)
+		}
+
+		// Verify with short hash
+		readDataShort, _, err := store.ReadObject(hash[:8])
+		if err != nil {
+			t.Fatalf("RoundTrip[%d]: ReadObject with short hash failed: %v", i, err)
+		}
+		if string(readDataShort) != string(payload) {
+			t.Fatalf("RoundTrip[%d]: short hash read mismatch", i)
+		}
+	}
+}
+
+func TestObjectStoreHashStability(t *testing.T) {
+	tmpDir := t.TempDir()
+	store := storage.NewObjectStore(tmpDir)
+
+	payload := []byte("stable content for object store hash test")
+	hashes := make([]string, 50)
+
+	for i := 0; i < 50; i++ {
+		h, err := store.WriteObject(payload)
+		if err != nil {
+			t.Fatalf("WriteObject[%d] failed: %v", i, err)
+		}
+		hashes[i] = h
+	}
+
+	for i := 1; i < len(hashes); i++ {
+		if hashes[i] != hashes[0] {
+			t.Fatalf("Hash instability at iteration %d: expected %s, got %s", i, hashes[0], hashes[i])
+		}
+	}
+}
+
+func TestObjectStoreEmptyPayload(t *testing.T) {
+	tmpDir := t.TempDir()
+	store := storage.NewObjectStore(tmpDir)
+
+	payload := []byte{}
+	hash, err := store.WriteObject(payload)
+	if err != nil {
+		t.Fatalf("WriteObject empty payload failed: %v", err)
+	}
+
+	readData, _, err := store.ReadObject(hash)
+	if err != nil {
+		t.Fatalf("ReadObject empty payload failed: %v", err)
+	}
+	if len(readData) != 0 {
+		t.Fatalf("Expected empty payload, got %d bytes", len(readData))
+	}
+}
+
+func TestObjectStoreCorruptFileDetection(t *testing.T) {
+	tmpDir := t.TempDir()
+	store := storage.NewObjectStore(tmpDir)
+
+	payload := []byte("blob 4\x00test")
+	hash, err := store.WriteObject(payload)
+	if err != nil {
+		t.Fatalf("WriteObject failed: %v", err)
+	}
+
+	filePath := filepath.Join(tmpDir, hash[:2], hash[2:])
+
+	// Truncate file to simulate corruption
+	os.Chmod(filePath, 0666)
+	os.WriteFile(filePath, []byte("truncated"), 0666)
+
+	_, _, err = store.ReadObject(hash)
+	if !errors.Is(err, storage.ErrCorruptObject) {
+		t.Fatalf("expected ErrCorruptObject for truncated file, got: %v", err)
+	}
+}
+
+func TestAtomicWriteAndCleanup(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Test successful atomic write
+	data := []byte("atomic test data")
+	err := storage.WriteFileAtomic(filepath.Join(tmpDir, "test.txt"), data, 0644)
+	if err != nil {
+		t.Fatalf("WriteFileAtomic failed: %v", err)
+	}
+
+	readData, err := os.ReadFile(filepath.Join(tmpDir, "test.txt"))
+	if err != nil {
+		t.Fatalf("ReadFile failed: %v", err)
+	}
+	if string(readData) != string(data) {
+		t.Fatalf("Atomic write data mismatch")
+	}
+
+	// Test no leftover temp files
+	entries, _ := os.ReadDir(tmpDir)
+	for _, e := range entries {
+		if len(e.Name()) > 13 && e.Name()[:13] == ".minigit-tmp-" {
+			t.Fatalf("Leftover temp file found: %s", e.Name())
+		}
+	}
+
+	// Test CleanupTempFiles
+	os.WriteFile(filepath.Join(tmpDir, ".minigit-tmp-abc123"), []byte("stale"), 0644)
+	os.WriteFile(filepath.Join(tmpDir, ".minigit-tmp-def456"), []byte("stale2"), 0644)
+	os.WriteFile(filepath.Join(tmpDir, "normal.txt"), []byte("keep"), 0644)
+
+	cleaned, err := storage.CleanupTempFiles(tmpDir)
+	if err != nil {
+		t.Fatalf("CleanupTempFiles failed: %v", err)
+	}
+	if cleaned != 2 {
+		t.Fatalf("Expected 2 cleaned files, got %d", cleaned)
+	}
+
+	// Verify normal file still exists
+	if _, err := os.Stat(filepath.Join(tmpDir, "normal.txt")); err != nil {
+		t.Fatalf("Normal file should not be deleted")
 	}
 }

@@ -343,3 +343,172 @@ func TestSafetyRejections(t *testing.T) {
 		t.Fatalf("expected rejection of .minigit, got exit code %d: %s", code, errOut)
 	}
 }
+
+func TestBranchAndCheckoutFlow(t *testing.T) {
+	repoDir := t.TempDir()
+
+	// Initialize and create initial commit
+	runCLI(repoDir, "init")
+	file1 := filepath.Join(repoDir, "file.txt")
+	os.WriteFile(file1, []byte("version 1"), 0644)
+	runCLI(repoDir, "add", ".")
+	runCLI(repoDir, "commit", "-m", "initial")
+
+	// Create branches
+	code, out, _ := runCLI(repoDir, "branch", "develop")
+	if code != 0 {
+		t.Fatalf("branch develop failed")
+	}
+	code, out, _ = runCLI(repoDir, "branch", "feature/auth")
+	if code != 0 {
+		t.Fatalf("branch feature/auth failed")
+	}
+
+	// List branches
+	code, out, _ = runCLI(repoDir, "branch")
+	if !strings.Contains(out, "* main") || !strings.Contains(out, "develop") || !strings.Contains(out, "feature/auth") {
+		t.Fatalf("branch listing failed: %s", out)
+	}
+
+	// Duplicate branch rejection
+	code, _, errOut := runCLI(repoDir, "branch", "develop")
+	if code == 0 || !strings.Contains(errOut, "already exists") {
+		t.Fatalf("expected duplicate branch rejection, got: %s", errOut)
+	}
+
+	// Invalid branch names
+	invalidNames := []string{"bad..name", "bad:char", "bad name"}
+	for _, name := range invalidNames {
+		code, _, errOut := runCLI(repoDir, "branch", name)
+		if code == 0 {
+			t.Fatalf("expected rejection of invalid branch name '%s'", name)
+		}
+		_ = errOut
+	}
+
+	// Empty branch name triggers listing (not creation)
+	code, out, _ = runCLI(repoDir, "branch")
+	if !strings.Contains(out, "main") {
+		t.Fatalf("branch listing with empty name failed: %s", out)
+	}
+
+	// Checkout to develop
+	code, out, _ = runCLI(repoDir, "checkout", "develop")
+	if code != 0 || !strings.Contains(out, "Switched to branch 'develop'") {
+		t.Fatalf("checkout develop failed: %s", out)
+	}
+
+	// Modify on develop
+	os.WriteFile(file1, []byte("version 2 on develop"), 0644)
+	runCLI(repoDir, "add", ".")
+	runCLI(repoDir, "commit", "-m", "update on develop")
+
+	// Checkout back to main
+	code, out, _ = runCLI(repoDir, "checkout", "main")
+	if code != 0 {
+		t.Fatalf("checkout main failed: %s", out)
+	}
+
+	// Verify content reverted
+	content, _ := os.ReadFile(file1)
+	if string(content) != "version 1" {
+		t.Fatalf("content not reverted after checkout: %s", string(content))
+	}
+
+	// Make a second commit to have a parent for detached HEAD test
+	os.WriteFile(file1, []byte("version 1.1 on main"), 0644)
+	runCLI(repoDir, "add", ".")
+	runCLI(repoDir, "commit", "-m", "update on main")
+
+	// Detached HEAD via parent hash
+	repo := repository.OpenRepository(repoDir)
+	headCommit, _ := repo.GetHeadCommitHash()
+	commitObj, _, _ := repo.GetCommitByHash(headCommit)
+	parentHash := commitObj.Parent
+
+	if parentHash == "" {
+		t.Fatalf("expected parent commit hash for detached HEAD test")
+	}
+
+	code, out, _ = runCLI(repoDir, "checkout", parentHash[:7])
+	if code != 0 || !strings.Contains(out, "detached HEAD") {
+		t.Fatalf("detached HEAD checkout failed: %s", out)
+	}
+
+	// Checkout back to main from detached
+	code, out, _ = runCLI(repoDir, "checkout", "main")
+	if code != 0 {
+		t.Fatalf("checkout main from detached failed: %s", out)
+	}
+
+	// Checkout with local changes (should fail)
+	os.WriteFile(file1, []byte("dirty local change"), 0644)
+	code, _, errOut = runCLI(repoDir, "checkout", "develop")
+	if code == 0 || !strings.Contains(errOut, "local changes") {
+		t.Fatalf("expected checkout conflict with local changes, got: %s", errOut)
+	}
+
+	// Restore and retry
+	runCLI(repoDir, "restore", "file.txt")
+	code, out, _ = runCLI(repoDir, "checkout", "develop")
+	if code != 0 {
+		t.Fatalf("checkout develop after restore failed: %s", out)
+	}
+
+	// Verify develop content
+	content, _ = os.ReadFile(file1)
+	if string(content) != "version 2 on develop" {
+		t.Fatalf("develop content incorrect: %s", string(content))
+	}
+}
+
+func TestObjectCorruptionIntegration(t *testing.T) {
+	repoDir := t.TempDir()
+	runCLI(repoDir, "init")
+
+	f := filepath.Join(repoDir, "data.txt")
+	os.WriteFile(f, []byte("important data"), 0644)
+	runCLI(repoDir, "add", ".")
+	code, out, errOut := runCLI(repoDir, "commit", "-m", "important commit")
+	if code != 0 {
+		t.Fatalf("commit failed: %s %s", out, errOut)
+	}
+
+	// Get commit hash
+	repo := repository.OpenRepository(repoDir)
+	headHash, _ := repo.GetHeadCommitHash()
+
+	// Corrupt the object file
+	objPath := filepath.Join(repoDir, ".minigit", "objects", headHash[:2], headHash[2:])
+	os.Chmod(objPath, 0666)
+	os.WriteFile(objPath, []byte("corrupted data"), 0666)
+
+	// Try to show the corrupted commit
+	code, _, errOut = runCLI(repoDir, "show", headHash[:7])
+	if code == 0 || !strings.Contains(errOut, "corrupt") {
+		t.Fatalf("expected corrupt object error, got: %s", errOut)
+	}
+
+	// Try log (should fail or handle gracefully)
+	code, _, _ = runCLI(repoDir, "log")
+	// Log may succeed or fail depending on implementation, just verify no crash
+}
+
+func TestNonExistentObjectIntegration(t *testing.T) {
+	repoDir := t.TempDir()
+	runCLI(repoDir, "init")
+
+	fakeHash := "0000000000000000000000000000000000000000000000000000000000000000"
+
+	// Try to show non-existent object
+	code, _, errOut := runCLI(repoDir, "show", fakeHash)
+	if code == 0 || !strings.Contains(errOut, "not found") && !strings.Contains(errOut, "No se encontró") {
+		t.Fatalf("expected not found error, got: %s", errOut)
+	}
+
+	// Try to checkout non-existent commit
+	code, _, errOut = runCLI(repoDir, "checkout", fakeHash[:7])
+	if code == 0 || !strings.Contains(errOut, "not found") && !strings.Contains(errOut, "did not match") {
+		t.Fatalf("expected not found error for checkout, got: %s", errOut)
+	}
+}

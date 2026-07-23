@@ -1,11 +1,13 @@
 package object_test
 
 import (
+	"bytes"
 	"errors"
 	"testing"
 	"time"
 
 	"minigit/internal/object"
+	"minigit/internal/storage"
 )
 
 const (
@@ -186,5 +188,231 @@ func TestDecodeObjectValidation(t *testing.T) {
 	_, _, _, err = object.DecodeObject([]byte("blob -5\x00hello"))
 	if err == nil {
 		t.Fatalf("expected invalid size error")
+	}
+}
+
+func TestBlobRoundTrip(t *testing.T) {
+	contents := [][]byte{
+		{},
+		[]byte("hello"),
+		bytes.Repeat([]byte("A"), 10000),
+		{0x00, 0xFF, 0xFE, 0xFD},
+		[]byte("line1\nline2\r\nline3\ttab"),
+	}
+
+	for i, content := range contents {
+		blob := object.NewBlob(content)
+		serialized := blob.Serialize()
+		decoded, err := object.DecodeBlob(serialized)
+		if err != nil {
+			t.Fatalf("RoundTrip[%d]: DecodeBlob failed: %v", i, err)
+		}
+		if string(decoded.Data) != string(content) {
+			t.Fatalf("RoundTrip[%d]: content mismatch", i)
+		}
+		if len(decoded.Data) != len(content) {
+			t.Fatalf("RoundTrip[%d]: size mismatch: expected %d, got %d", i, len(content), len(decoded.Data))
+		}
+	}
+}
+
+func TestTreeRoundTrip(t *testing.T) {
+	entries := []object.TreeEntry{
+		{Name: "z.txt", Hash: validHash1, Type: "blob", Mode: 0644},
+		{Name: "a.txt", Hash: validHash2, Type: "blob", Mode: 0644},
+		{Name: "src", Hash: validHash1, Type: "tree", Mode: 0755},
+	}
+
+	tree := object.NewTree(entries)
+	serialized := tree.Serialize()
+	decoded, err := object.DecodeTree(serialized)
+	if err != nil {
+		t.Fatalf("Tree RoundTrip: DecodeTree failed: %v", err)
+	}
+
+	if len(decoded.Entries) != len(entries) {
+		t.Fatalf("Tree RoundTrip: entry count mismatch: expected %d, got %d", len(entries), len(decoded.Entries))
+	}
+
+	// Verify entries are sorted
+	if decoded.Entries[0].Name != "a.txt" || decoded.Entries[1].Name != "src" || decoded.Entries[2].Name != "z.txt" {
+		t.Fatalf("Tree RoundTrip: entries not sorted correctly")
+	}
+
+	for i, e := range decoded.Entries {
+		origIdx := -1
+		for j, orig := range entries {
+			if orig.Name == e.Name {
+				origIdx = j
+				break
+			}
+		}
+		if origIdx == -1 {
+			t.Fatalf("Tree RoundTrip: entry %d '%s' not found in original", i, e.Name)
+		}
+		if e.Hash != entries[origIdx].Hash {
+			t.Fatalf("Tree RoundTrip: hash mismatch for '%s'", e.Name)
+		}
+		if e.Type != entries[origIdx].Type {
+			t.Fatalf("Tree RoundTrip: type mismatch for '%s'", e.Name)
+		}
+		if e.Mode != entries[origIdx].Mode {
+			t.Fatalf("Tree RoundTrip: mode mismatch for '%s'", e.Name)
+		}
+	}
+}
+
+func TestCommitRoundTrip(t *testing.T) {
+	fixedTime := time.Date(2026, 1, 15, 8, 30, 45, 0, time.UTC)
+
+	testCases := []struct {
+		tree    string
+		parent  string
+		author  string
+		email   string
+		message string
+	}{
+		{validHash1, "", "Root Author", "root@test.com", "Root commit"},
+		{validHash1, validHash2, "Child Author", "child@test.com", "Child commit\n\nWith multiple paragraphs\n\nAnd more text"},
+		{validHash1, validHash2, "Unicode Authör", "üñícodé@test.com", "Mensaje en español: ¡Hola mundo!"},
+		{validHash1, "", "Empty Msg", "empty@test.com", ""},
+	}
+
+	for i, tc := range testCases {
+		commit := object.NewCommit(tc.tree, tc.parent, tc.author, tc.email, tc.message, fixedTime)
+		serialized := commit.Serialize()
+		decoded, err := object.DecodeCommit(serialized)
+		if err != nil {
+			t.Fatalf("Commit RoundTrip[%d]: DecodeCommit failed: %v", i, err)
+		}
+		if decoded.Tree != tc.tree {
+			t.Fatalf("Commit RoundTrip[%d]: tree mismatch", i)
+		}
+		if decoded.Parent != tc.parent {
+			t.Fatalf("Commit RoundTrip[%d]: parent mismatch", i)
+		}
+		if decoded.AuthorName != tc.author {
+			t.Fatalf("Commit RoundTrip[%d]: author mismatch: expected '%s', got '%s'", i, tc.author, decoded.AuthorName)
+		}
+		if decoded.AuthorMail != tc.email {
+			t.Fatalf("Commit RoundTrip[%d]: email mismatch", i)
+		}
+		if decoded.Message != tc.message {
+			t.Fatalf("Commit RoundTrip[%d]: message mismatch: expected '%s', got '%s'", i, tc.message, decoded.Message)
+		}
+		if !decoded.CreatedAt.Equal(fixedTime) {
+			t.Fatalf("Commit RoundTrip[%d]: time mismatch", i)
+		}
+	}
+}
+
+func TestHashStability(t *testing.T) {
+	// Blob hash stability
+	content := []byte("stable content for hash test")
+
+	hashes := make([]string, 100)
+	for i := 0; i < 100; i++ {
+		b := object.NewBlob(content)
+		hashes[i] = storage.HashBytes(b.Serialize())
+	}
+
+	for i := 1; i < len(hashes); i++ {
+		if hashes[i] != hashes[0] {
+			t.Fatalf("Blob hash instability at iteration %d: expected %s, got %s", i, hashes[0], hashes[i])
+		}
+	}
+
+	// Tree hash stability
+	entries := []object.TreeEntry{
+		{Name: "a.txt", Hash: validHash1, Type: "blob", Mode: 0644},
+		{Name: "b.txt", Hash: validHash2, Type: "blob", Mode: 0644},
+	}
+	tree := object.NewTree(entries)
+	treeSerialized := tree.Serialize()
+	treeHash := storage.HashBytes(treeSerialized)
+
+	for i := 0; i < 100; i++ {
+		unsortedEntries := []object.TreeEntry{
+			{Name: "b.txt", Hash: validHash2, Type: "blob", Mode: 0644},
+			{Name: "a.txt", Hash: validHash1, Type: "blob", Mode: 0644},
+		}
+		t2 := object.NewTree(unsortedEntries)
+		h := storage.HashBytes(t2.Serialize())
+		if h != treeHash {
+			t.Fatalf("Tree hash instability at iteration %d", i)
+		}
+	}
+
+	// Commit hash stability
+	fixedTime := time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC)
+	commit := object.NewCommit(validHash1, validHash2, "Author", "author@test.com", "Message", fixedTime)
+	commitSerialized := commit.Serialize()
+	commitHash := storage.HashBytes(commitSerialized)
+
+	for i := 0; i < 100; i++ {
+		c := object.NewCommit(validHash1, validHash2, "Author", "author@test.com", "Message", fixedTime)
+		h := storage.HashBytes(c.Serialize())
+		if h != commitHash {
+			t.Fatalf("Commit hash instability at iteration %d", i)
+		}
+	}
+}
+
+func TestEmptyBlob(t *testing.T) {
+	blob := object.NewBlob([]byte{})
+	serialized := blob.Serialize()
+	decoded, err := object.DecodeBlob(serialized)
+	if err != nil {
+		t.Fatalf("Empty blob decode failed: %v", err)
+	}
+	if len(decoded.Data) != 0 {
+		t.Fatalf("Empty blob should have 0 bytes, got %d", len(decoded.Data))
+	}
+	if len(blob.Data) != 0 {
+		t.Fatalf("Empty blob data should be empty, got %d bytes", len(blob.Data))
+	}
+}
+
+func TestTreeWithSubtrees(t *testing.T) {
+	leafBlob := object.TreeEntry{Name: "leaf.txt", Hash: validHash1, Type: "blob", Mode: 0644}
+	subTree := object.NewTree([]object.TreeEntry{leafBlob})
+	subTreeHash := storage.HashBytes(subTree.Serialize())
+
+	rootTree := object.NewTree([]object.TreeEntry{
+		{Name: "subdir", Hash: subTreeHash, Type: "tree", Mode: 0755},
+		{Name: "root.txt", Hash: validHash2, Type: "blob", Mode: 0644},
+	})
+
+	serialized := rootTree.Serialize()
+	decoded, err := object.DecodeTree(serialized)
+	if err != nil {
+		t.Fatalf("Tree with subtrees decode failed: %v", err)
+	}
+	if len(decoded.Entries) != 2 {
+		t.Fatalf("Expected 2 entries, got %d", len(decoded.Entries))
+	}
+	if decoded.Entries[0].Name != "root.txt" || decoded.Entries[1].Name != "subdir" {
+		t.Fatalf("Entries not sorted correctly")
+	}
+	if decoded.Entries[1].Type != "tree" {
+		t.Fatalf("Second entry should be a tree")
+	}
+}
+
+func TestCommitRootCommit(t *testing.T) {
+	fixedTime := time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC)
+	commit := object.NewCommit(validHash1, "", "Root Author", "root@test.com", "Initial commit", fixedTime)
+
+	if commit.Parent != "" {
+		t.Fatalf("Root commit should have empty parent")
+	}
+
+	serialized := commit.Serialize()
+	decoded, err := object.DecodeCommit(serialized)
+	if err != nil {
+		t.Fatalf("Root commit decode failed: %v", err)
+	}
+	if decoded.Parent != "" {
+		t.Fatalf("Decoded root commit should have empty parent, got '%s'", decoded.Parent)
 	}
 }

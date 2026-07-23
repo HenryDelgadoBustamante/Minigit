@@ -12,10 +12,10 @@ import (
 )
 
 var (
-	ErrObjectNotFound    = errors.New("object not found")
-	ErrAmbiguousHash     = errors.New("short hash is ambiguous")
-	ErrCorruptObject     = errors.New("corrupt object: hash mismatch or invalid format")
-	ErrInvalidHashFormat = errors.New("invalid hash format")
+	ErrObjectNotFound    = errors.New("object not found: the requested object does not exist in the repository")
+	ErrAmbiguousHash     = errors.New("short hash is ambiguous: prefix matches multiple objects")
+	ErrCorruptObject     = errors.New("corrupt object: integrity check failed (hash mismatch or invalid format)")
+	ErrInvalidHashFormat = errors.New("invalid hash format: must be 4-64 hexadecimal characters")
 )
 
 // ObjectStore manages reading and writing content-addressable objects in .minigit/objects/
@@ -68,12 +68,16 @@ func (s *ObjectStore) ReadObject(hashPrefix string) ([]byte, string, error) {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, "", fmt.Errorf("%w: %s", ErrObjectNotFound, fullHash)
 		}
-		return nil, "", fmt.Errorf("reading object %s failed: %w", fullHash, err)
+		return nil, "", fmt.Errorf("failed to read object file %s: %w", fullHash, err)
+	}
+
+	if len(compressed) == 0 {
+		return nil, "", fmt.Errorf("%w: object file is empty (%s)", ErrCorruptObject, fullHash)
 	}
 
 	decompressed, err := Decompress(compressed)
 	if err != nil {
-		return nil, "", fmt.Errorf("%w: %v", ErrCorruptObject, err)
+		return nil, "", fmt.Errorf("%w: zlib decompression failed for %s: %v", ErrCorruptObject, fullHash, err)
 	}
 
 	// Verify integrity: recalculated SHA-256 must match expected full hash
@@ -100,30 +104,30 @@ func (s *ObjectStore) ReadObjectType(hashPrefix string) (string, string, error) 
 		if errors.Is(err, os.ErrNotExist) {
 			return "", "", fmt.Errorf("%w: %s", ErrObjectNotFound, fullHash)
 		}
-		return "", "", fmt.Errorf("reading object %s failed: %w", fullHash, err)
+		return "", "", fmt.Errorf("failed to open object file %s: %w", fullHash, err)
 	}
 	defer f.Close()
 
 	zr, err := zlib.NewReader(f)
 	if err != nil {
-		return "", "", fmt.Errorf("%w: %v", ErrCorruptObject, err)
+		return "", "", fmt.Errorf("%w: zlib decompression failed for %s: %v", ErrCorruptObject, fullHash, err)
 	}
 	defer zr.Close()
 
 	var buf [64]byte
 	n, _ := io.ReadFull(zr, buf[:])
 	if n == 0 {
-		return "", "", fmt.Errorf("%w: empty object file %s", ErrCorruptObject, fullHash)
+		return "", "", fmt.Errorf("%w: object file is empty (%s)", ErrCorruptObject, fullHash)
 	}
 
 	nullIdx := bytes.IndexByte(buf[:n], 0)
 	if nullIdx == -1 {
-		return "", "", fmt.Errorf("%w: missing header null byte in %s", ErrCorruptObject, fullHash)
+		return "", "", fmt.Errorf("%w: missing header null byte in %s (invalid object format)", ErrCorruptObject, fullHash)
 	}
 
 	parts := bytes.Split(buf[:nullIdx], []byte{' '})
 	if len(parts) != 2 {
-		return "", "", fmt.Errorf("%w: invalid header format in %s", ErrCorruptObject, fullHash)
+		return "", "", fmt.Errorf("%w: invalid header format in %s (expected '<type> <size>')", ErrCorruptObject, fullHash)
 	}
 
 	return string(parts[0]), fullHash, nil

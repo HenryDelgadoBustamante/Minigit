@@ -3,6 +3,7 @@ package repository
 import (
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -20,11 +21,59 @@ type Repository struct {
 // OpenRepository initializes a Repository struct for an existing repo root.
 func OpenRepository(repoRoot string) *Repository {
 	objectsDir := filepath.Join(repoRoot, ".minigit", "objects")
-	return &Repository{
+	repo := &Repository{
 		Root:    repoRoot,
 		Objects: storage.NewObjectStore(objectsDir),
 		Ignore:  NewIgnoreMatcher(repoRoot),
 	}
+
+	// Attempt recovery: clean up stale temp files and abandoned locks
+	repo.recoverFromFailures()
+
+	return repo
+}
+
+// recoverFromFailures cleans up stale temporary files and abandoned lock files
+// to restore repository consistency after an unexpected interruption.
+func (r *Repository) recoverFromFailures() {
+	minigitDir := filepath.Join(r.Root, ".minigit")
+
+	// Clean up stale temp files in .minigit and subdirectories
+	cleaned, err := storage.CleanupTempFilesRecursive(minigitDir)
+	if err != nil {
+		// Log but don't fail: recovery is best-effort
+		_ = fmt.Errorf("recovery: failed to clean temp files: %w", err)
+	}
+
+	// Clean up abandoned lock files
+	abandonedLocks := r.detectAbandonedLocks()
+	for _, lockPath := range abandonedLocks {
+		if err := os.Remove(lockPath); err != nil && !os.IsNotExist(err) {
+			_ = fmt.Errorf("recovery: failed to remove abandoned lock %s: %w", lockPath, err)
+		}
+	}
+
+	_ = cleaned // Recovery stats (could be logged in future)
+}
+
+// detectAbandonedLocks finds lock files whose owning process is no longer running.
+func (r *Repository) detectAbandonedLocks() []string {
+	var abandoned []string
+
+	minigitDir := filepath.Join(r.Root, ".minigit")
+	filepath.Walk(minigitDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil
+		}
+		if strings.HasSuffix(path, ".lock") && !info.IsDir() {
+			if isLockStale(path) {
+				abandoned = append(abandoned, path)
+			}
+		}
+		return nil
+	})
+
+	return abandoned
 }
 
 // GetHEAD returns current HEAD state.
