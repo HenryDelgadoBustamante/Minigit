@@ -10,6 +10,7 @@ import (
 	"unicode"
 
 	"minigit/internal/filesystem"
+	"minigit/internal/object"
 	"minigit/internal/storage"
 )
 
@@ -112,6 +113,37 @@ func CreateBranch(repoRoot, branchName, commitHash string) error {
 	return WriteBranchCommit(repoRoot, branchName, commitHash)
 }
 
+// BranchExists checks if a branch exists in the repository.
+func BranchExists(repoRoot, branchName string) bool {
+	refPath, err := GetBranchRefPath(repoRoot, branchName)
+	if err != nil {
+		return false
+	}
+	_, err = os.Stat(refPath)
+	return err == nil
+}
+
+// DeleteBranch removes a branch reference if it exists.
+func DeleteBranch(repoRoot, branchName string) error {
+	if err := ValidateBranchName(branchName); err != nil {
+		return err
+	}
+
+	refPath, err := GetBranchRefPath(repoRoot, branchName)
+	if err != nil {
+		return err
+	}
+
+	if _, err := os.Stat(refPath); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("%w: %s", ErrBranchNotFound, branchName)
+		}
+		return err
+	}
+
+	return os.Remove(refPath)
+}
+
 // ListBranches returns sorted list of all branch names.
 func ListBranches(repoRoot string) ([]string, error) {
 	headsDir := filepath.Join(repoRoot, ".minigit", "refs", "heads")
@@ -148,5 +180,22 @@ func (r *Repository) ListBranches() ([]string, error) {
 
 // CreateBranch creates a new branch pointing to a commit hash if it doesn't already exist.
 func (r *Repository) CreateBranch(branchName, commitHash string) error {
+	if err := ValidateBranchName(branchName); err != nil {
+		return err
+	}
+
+	if commitHash == "" {
+		return fmt.Errorf("cannot create branch '%s': no commit hash provided", branchName)
+	}
+
+	// Verify the commit object exists
+	objType, _, err := r.GetObjectType(commitHash)
+	if err != nil {
+		return fmt.Errorf("cannot create branch '%s': commit %s does not exist: %w", branchName, commitHash[:7], err)
+	}
+	if objType != object.TypeCommit {
+		return fmt.Errorf("cannot create branch '%s': object %s is not a commit (type: %s)", branchName, commitHash[:7], objType)
+	}
+
 	return CreateBranch(r.Root, branchName, commitHash)
 }

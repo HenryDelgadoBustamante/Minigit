@@ -23,6 +23,75 @@ type CheckoutResult struct {
 	CommitMsg    string
 }
 
+// HasLocalChanges checks if there are unstaged modifications in the working tree.
+func (r *Repository) HasLocalChanges() (bool, error) {
+	idx, err := ReadIndex(r.Root)
+	if err != nil {
+		return false, err
+	}
+
+	headCommitHash, err := r.GetHeadCommitHash()
+	if err != nil {
+		return false, err
+	}
+
+	var headTreeMap map[string]object.TreeEntry
+	if headCommitHash != "" {
+		commitObj, _, err := r.GetCommitByHash(headCommitHash)
+		if err != nil {
+			return false, err
+		}
+		headTreeMap, err = r.ReadTreeToMap(commitObj.Tree)
+		if err != nil {
+			return false, err
+		}
+	} else {
+		headTreeMap = make(map[string]object.TreeEntry)
+	}
+
+	workItems, err := filesystem.WalkWorkingTree(r.Root, r.Ignore)
+	if err != nil {
+		return false, err
+	}
+
+	workTreeMap := make(map[string]filesystem.FileItem)
+	for _, item := range workItems {
+		workTreeMap[item.RelPath] = item
+	}
+
+	for _, idxEntry := range idx.SortedEntries() {
+		if idxEntry.Deleted {
+			continue
+		}
+
+		item, existsOnDisk := workTreeMap[idxEntry.Path]
+		if !existsOnDisk {
+			return true, nil
+		}
+
+		if item.Info.Size() != idxEntry.Size {
+			return true, nil
+		}
+
+		data, err := os.ReadFile(item.AbsPath)
+		if err == nil {
+			blob := object.NewBlob(data)
+			currentHash := storage.HashBytes(blob.Serialize())
+			if currentHash != idxEntry.Hash {
+				return true, nil
+			}
+		}
+	}
+
+	for headPath := range headTreeMap {
+		if _, inIndex := idx.Entries[headPath]; !inIndex {
+			return true, nil
+		}
+	}
+
+	return false, nil
+}
+
 // Checkout switches to a target branch or commit hash.
 func (r *Repository) Checkout(target string) (*CheckoutResult, error) {
 	target = strings.TrimSpace(target)
@@ -45,14 +114,18 @@ func (r *Repository) Checkout(target string) (*CheckoutResult, error) {
 		targetBranch = target
 		targetCommitHash = commitHashFromBranch
 	} else {
-		// Resolve as commit hash prefix
+		// Try to resolve as commit hash prefix
 		resolvedHash, errHash := r.Objects.ResolveHash(target)
 		if errHash != nil {
+			if errors.Is(errBranch, ErrBranchNotFound) {
+				return nil, fmt.Errorf("branch '%s' not found and '%s' is not a valid commit hash", target, target)
+			}
 			return nil, fmt.Errorf("pathspec or branch '%s' did not match any branch or valid commit object: %v", target, errHash)
 		}
 		targetCommitHash = resolvedHash
 	}
 
+	// Verify the target is a valid commit
 	targetCommit, fullCommitHash, err := r.GetCommitByHash(targetCommitHash)
 	if err != nil {
 		return nil, fmt.Errorf("target '%s' is not a valid commit object: %w", target, err)
@@ -85,11 +158,11 @@ func (r *Repository) Checkout(target string) (*CheckoutResult, error) {
 	// Check for local modifications that would be overwritten
 	var conflictingFiles []string
 
+	// Check files that exist in target commit
 	for path, targetEntry := range targetTreeMap {
 		idxEntry, inIndex := idx.Entries[path]
 		curHeadEntry, inCurHead := currentHeadTreeMap[path]
 
-		// If file exists on disk
 		absPath := filepath.Join(r.Root, filepath.FromSlash(path))
 		if info, err := os.Stat(absPath); err == nil {
 			data, err := os.ReadFile(absPath)
@@ -101,14 +174,36 @@ func (r *Repository) Checkout(target string) (*CheckoutResult, error) {
 				if !inIndex && !inCurHead && currentDiskHash != targetEntry.Hash {
 					conflictingFiles = append(conflictingFiles, path)
 				} else if inIndex && idxEntry.Hash != targetEntry.Hash && currentDiskHash != targetEntry.Hash {
-					// Case 2: Modified in working tree or index relative to target
+					// Case 2: Modified in working tree relative to target
 					if inCurHead && curHeadEntry.Hash != currentDiskHash {
 						conflictingFiles = append(conflictingFiles, path)
 					}
+				} else if !inIndex && inCurHead && curHeadEntry.Hash != currentDiskHash {
+					// Case 3: File deleted from index but modified on disk
+					conflictingFiles = append(conflictingFiles, path)
 				}
 			}
 
 			_ = info
+		}
+	}
+
+	// Check tracked files in current HEAD that are modified on disk
+	for path, curHeadEntry := range currentHeadTreeMap {
+		if _, inTarget := targetTreeMap[path]; inTarget {
+			continue // Already checked above
+		}
+
+		absPath := filepath.Join(r.Root, filepath.FromSlash(path))
+		if _, err := os.Stat(absPath); err == nil {
+			data, err := os.ReadFile(absPath)
+			if err == nil {
+				blob := object.NewBlob(data)
+				currentDiskHash := storage.HashBytes(blob.Serialize())
+				if currentDiskHash != curHeadEntry.Hash {
+					conflictingFiles = append(conflictingFiles, path)
+				}
+			}
 		}
 	}
 
@@ -134,15 +229,19 @@ func (r *Repository) Checkout(target string) (*CheckoutResult, error) {
 	}
 
 	// Remove tracked files from current HEAD/Index that are missing in target commit
+	filesToRemove := make(map[string]bool)
 	for path := range currentHeadTreeMap {
 		if _, inTarget := targetTreeMap[path]; !inTarget {
-			filesystem.SafeRemoveFile(r.Root, path)
+			filesToRemove[path] = true
 		}
 	}
 	for path := range idx.Entries {
 		if _, inTarget := targetTreeMap[path]; !inTarget {
-			filesystem.SafeRemoveFile(r.Root, path)
+			filesToRemove[path] = true
 		}
+	}
+	for path := range filesToRemove {
+		filesystem.SafeRemoveFile(r.Root, path)
 	}
 
 	// Rebuild index to match target commit tree entries

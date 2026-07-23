@@ -29,10 +29,16 @@ func RunBranch(repo *repository.Repository, branchName string) error {
 		}
 
 		for _, b := range branches {
+			commitHash, err := repository.ReadBranchCommit(repo.Root, b)
+			shortHash := "???????"
+			if err == nil && len(commitHash) >= 7 {
+				shortHash = commitHash[:7]
+			}
+
 			if head.Type == repository.HEADTypeBranch && b == head.Branch {
-				fmt.Printf("* %s\n", b)
+				fmt.Printf("* %s (%s)\n", b, shortHash)
 			} else {
-				fmt.Printf("  %s\n", b)
+				fmt.Printf("  %s (%s)\n", b, shortHash)
 			}
 		}
 
@@ -40,6 +46,10 @@ func RunBranch(repo *repository.Repository, branchName string) error {
 	}
 
 	// Create branch
+	if err := repository.ValidateBranchName(branchName); err != nil {
+		return err
+	}
+
 	headCommitHash, err := repo.GetHeadCommitHash()
 	if err != nil || headCommitHash == "" {
 		return fmt.Errorf("cannot create branch '%s': current branch has no commits yet", branchName)
