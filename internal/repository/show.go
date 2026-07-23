@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"sort"
-	"strings"
 
 	"minigit/internal/object"
 	"minigit/internal/storage"
@@ -25,21 +24,23 @@ type ObjectInspectResult struct {
 	CommitDiff *CommitDiff
 }
 
-// InspectObject inspects any object (Blob, Tree, or Commit) given a full hash or short prefix (or "HEAD").
+// InspectObject inspects any object (Blob, Tree, or Commit) given a full hash, short prefix, branch, or "HEAD".
 func (r *Repository) InspectObject(hashPrefix string) (*ObjectInspectResult, error) {
-	hashPrefix = strings.TrimSpace(hashPrefix)
-	if hashPrefix == "" || strings.EqualFold(hashPrefix, "HEAD") {
-		headHash, err := r.GetHeadCommitHash()
-		if err != nil || headHash == "" {
-			return nil, ErrNoCommits
+	fullHash, err := r.ResolveObjectID(hashPrefix)
+	if err != nil {
+		if errors.Is(err, ErrAmbiguousPrefix) {
+			return nil, fmt.Errorf("El prefijo indicado es ambiguo: %s", hashPrefix)
 		}
-		hashPrefix = headHash
+		if errors.Is(err, ErrObjectNotFound) {
+			return nil, fmt.Errorf("No se encontró el objeto solicitado: %s", hashPrefix)
+		}
+		return nil, err
 	}
 
-	raw, fullHash, err := r.Objects.ReadObject(hashPrefix)
+	raw, fullHash, err := r.Objects.ReadObject(fullHash)
 	if err != nil {
 		if errors.Is(err, storage.ErrObjectNotFound) {
-			return nil, fmt.Errorf("No se encontró el objeto solicitado: %s", hashPrefix)
+			return nil, fmt.Errorf("No se encontró ningún objeto con el prefijo indicado: %s", hashPrefix)
 		}
 		if errors.Is(err, storage.ErrCorruptObject) || errors.Is(err, storage.ErrInvalidHashFormat) {
 			return nil, fmt.Errorf("Objeto corrupto: %w", err)
@@ -94,20 +95,14 @@ func (r *Repository) InspectObject(hashPrefix string) (*ObjectInspectResult, err
 	}
 }
 
-// GetCommitDiff retrieves a commit by prefix, resolving default hash, and computes diff against its parent commit.
+// GetCommitDiff retrieves a commit by prefix/ref and computes diff against its parent commit.
 func (r *Repository) GetCommitDiff(hashPrefix string) (*CommitDiff, *object.Commit, string, error) {
-	if hashPrefix == "" || strings.EqualFold(hashPrefix, "HEAD") {
-		headHash, err := r.GetHeadCommitHash()
-		if err != nil {
-			return nil, nil, "", err
-		}
-		if headHash == "" {
-			return nil, nil, "", ErrNoCommits
-		}
-		hashPrefix = headHash
+	fullHash, err := r.ResolveObjectID(hashPrefix)
+	if err != nil {
+		return nil, nil, "", err
 	}
 
-	commitObj, fullHash, err := r.GetCommitByHash(hashPrefix)
+	commitObj, fullHash, err := r.GetCommitByHash(fullHash)
 	if err != nil {
 		return nil, nil, "", err
 	}

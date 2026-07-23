@@ -512,3 +512,88 @@ func TestNonExistentObjectIntegration(t *testing.T) {
 		t.Fatalf("expected not found error for checkout, got: %s", errOut)
 	}
 }
+
+func TestDiffAndMergeCLIIntegration(t *testing.T) {
+	repoDir := t.TempDir()
+
+	// 1. Init
+	code, _, _ := runCLI(repoDir, "init")
+	if code != 0 {
+		t.Fatalf("init failed")
+	}
+
+	// 2. Commit 1 on main
+	file1 := filepath.Join(repoDir, "file1.txt")
+	os.WriteFile(file1, []byte("linea 1\n"), 0644)
+	runCLI(repoDir, "add", ".")
+	code, _, _ = runCLI(repoDir, "commit", "-m", "commit 1")
+	if code != 0 {
+		t.Fatalf("commit 1 failed")
+	}
+
+	repo := repository.OpenRepository(repoDir)
+	c1Hash, _ := repo.GetHeadCommitHash()
+
+	// 3. Create feature branch and switch to it
+	runCLI(repoDir, "branch", "feature")
+	runCLI(repoDir, "checkout", "feature")
+
+	// 4. Commit 2 on feature
+	os.WriteFile(file1, []byte("linea 1\nlinea 2\n"), 0644)
+	file2 := filepath.Join(repoDir, "file2.txt")
+	os.WriteFile(file2, []byte("nuevo archivo\n"), 0644)
+	runCLI(repoDir, "add", ".")
+	code, _, _ = runCLI(repoDir, "commit", "-m", "commit 2")
+	if code != 0 {
+		t.Fatalf("commit 2 failed")
+	}
+	c2Hash, _ := repo.GetHeadCommitHash()
+
+	// 5. Test minigit diff
+	code, out, errOut := runCLI(repoDir, "diff", c1Hash[:7], c2Hash[:7])
+	if code != 0 {
+		t.Fatalf("diff failed: %s %s", out, errOut)
+	}
+	if !strings.Contains(out, "M  file1.txt") || !strings.Contains(out, "A  file2.txt") {
+		t.Fatalf("diff output missing summary: %s", out)
+	}
+
+	// 6. Test minigit show with prefix
+	code, out, _ = runCLI(repoDir, "show", c2Hash[:6])
+	if code != 0 || !strings.Contains(out, "commit") {
+		t.Fatalf("show short prefix failed: %s", out)
+	}
+
+	// 7. Test minigit merge fast-forward back on main
+	runCLI(repoDir, "checkout", "main")
+	code, out, errOut = runCLI(repoDir, "merge", "feature")
+	if code != 0 || !strings.Contains(out, "Fast-forward realizado correctamente.") {
+		t.Fatalf("merge fast-forward failed: out='%s' errOut='%s'", out, errOut)
+	}
+
+	// Verify main head matches feature head
+	mainHeadHash, _ := repo.GetHeadCommitHash()
+	if mainHeadHash != c2Hash {
+		t.Fatalf("expected main head to be %s, got %s", c2Hash, mainHeadHash)
+	}
+
+	// 8. Test divergent merge rejection
+	// Create commit on feature
+	runCLI(repoDir, "checkout", "feature")
+	os.WriteFile(file2, []byte("cambio feature\n"), 0644)
+	runCLI(repoDir, "add", ".")
+	runCLI(repoDir, "commit", "-m", "commit feature 3")
+
+	// Create commit on main
+	runCLI(repoDir, "checkout", "main")
+	os.WriteFile(file1, []byte("cambio main\n"), 0644)
+	runCLI(repoDir, "add", ".")
+	runCLI(repoDir, "commit", "-m", "commit main 3")
+
+	// Merge should fail
+	code, out, errOut = runCLI(repoDir, "merge", "feature")
+	if code == 0 || !strings.Contains(errOut, "divergido") {
+		t.Fatalf("expected divergent merge error, got exit code %d: out='%s' errOut='%s'", code, out, errOut)
+	}
+}
+

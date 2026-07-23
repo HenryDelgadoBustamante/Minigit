@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"strings"
@@ -10,7 +11,7 @@ import (
 	"minigit/internal/repository"
 )
 
-// RunShow shows detailed information for a specific object hash (Blob, Tree, or Commit).
+// RunShow shows detailed information for a specific object hash prefix or branch name (Blob, Tree, or Commit).
 func RunShow(repo *repository.Repository, hashPrefix string) error {
 	res, err := repo.InspectObject(hashPrefix)
 	if err != nil {
@@ -19,10 +20,20 @@ func RunShow(repo *repository.Repository, hashPrefix string) error {
 
 	switch res.Type {
 	case object.TypeBlob:
-		_, err := os.Stdout.Write(res.BlobData)
-		return err
+		fmt.Printf("blob %s (%d bytes)\n", res.FullHash, len(res.BlobData))
+		if bytes.IndexByte(res.BlobData, 0) != -1 {
+			fmt.Println("[Contenido de archivo binario no imprimible]")
+		} else {
+			_, err := os.Stdout.Write(res.BlobData)
+			if !bytes.HasSuffix(res.BlobData, []byte("\n")) {
+				fmt.Println()
+			}
+			return err
+		}
+		return nil
 
 	case object.TypeTree:
+		fmt.Printf("tree %s (%d entradas)\n", res.FullHash, len(res.Tree.Entries))
 		for _, entry := range res.Tree.Entries {
 			fmt.Printf("%06o %s %s\t%s\n", entry.Mode, entry.Type, entry.Hash, entry.Name)
 		}
@@ -46,7 +57,7 @@ func RunShow(repo *repository.Repository, hashPrefix string) error {
 		if res.CommitDiff != nil {
 			diff := res.CommitDiff
 			if len(diff.Added) > 0 || len(diff.Modified) > 0 || len(diff.Deleted) > 0 {
-				fmt.Println("Changes in this commit:")
+				fmt.Println("Cambios en este commit:")
 				for _, p := range diff.Added {
 					fmt.Printf("  + %s\n", p)
 				}

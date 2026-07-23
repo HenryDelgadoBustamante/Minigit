@@ -211,6 +211,32 @@ func Execute(args []string) int {
 		}
 		return 0
 
+	case "diff", "diferencias":
+		if len(args) > 1 && (args[1] == "--help" || args[1] == "-h") {
+			ShowCommandHelp("diff")
+			return 0
+		}
+		if err := commands.RunDiff(repo, args[1:]); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			return 1
+		}
+		return 0
+
+	case "merge", "fusionar", "unir":
+		if len(args) > 1 && (args[1] == "--help" || args[1] == "-h") {
+			ShowCommandHelp("merge")
+			return 0
+		}
+		targetBranch := ""
+		if len(args) > 1 {
+			targetBranch = args[1]
+		}
+		if err := commands.RunMerge(repo, targetBranch); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			return 1
+		}
+		return 0
+
 	default:
 		fmt.Fprintf(os.Stderr, "error: comando desconocido '%s'. Ejecuta 'minigit ayuda' para ver los comandos disponibles.\n", cmd)
 		return 1
