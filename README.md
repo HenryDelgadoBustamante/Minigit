@@ -441,4 +441,4 @@ go test -v ./...
 
 - **Hash Standard**: MiniGit utiliza **SHA-256** (64 hex chars) en lugar de SHA-1.
 - **Index**: El índice de MiniGit utiliza una estructura JSON estructurada y atómica determinista.
-- **Configuración de Autor**: Se configura mediante variables de entorno (`MINIGIT_AUTHOR_NAME`, `MINIGIT_AUTHOR_EMAIL`) o valores predeterminados explícitos.
+- **Configuración de Autor**: Se configura mediante variables de entorno (`MINIGIT_AUTHOR_NAME`, `MINIGIT_AUTHOR_EMAIL`) o valores predeterminados explícitos..
