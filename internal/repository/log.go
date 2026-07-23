@@ -1,9 +1,14 @@
 package repository
 
 import (
+	"errors"
 	"fmt"
 	"time"
+
+	"minigit/internal/storage"
 )
+
+var ErrNoCommits = errors.New("no hay commits registrados en este repositorio")
 
 type CommitLogEntry struct {
 	Hash        string
@@ -15,6 +20,7 @@ type CommitLogEntry struct {
 }
 
 // GetCommitHistory returns the commit history starting from HEAD.
+// Traverses commits sequentially backwards to the root commit (empty parent).
 func (r *Repository) GetCommitHistory() ([]CommitLogEntry, error) {
 	headCommitHash, err := r.GetHeadCommitHash()
 	if err != nil {
@@ -22,7 +28,7 @@ func (r *Repository) GetCommitHistory() ([]CommitLogEntry, error) {
 	}
 
 	if headCommitHash == "" {
-		return nil, fmt.Errorf("your current branch does not have any commits yet")
+		return nil, ErrNoCommits
 	}
 
 	var entries []CommitLogEntry
@@ -31,13 +37,19 @@ func (r *Repository) GetCommitHistory() ([]CommitLogEntry, error) {
 
 	for currHash != "" {
 		if visited[currHash] {
-			return nil, fmt.Errorf("cycle detected in commit history at %s", currHash)
+			return nil, fmt.Errorf("ciclo detectado en el historial de commits en: %s", currHash)
 		}
 		visited[currHash] = true
 
 		commitObj, fullHash, err := r.GetCommitByHash(currHash)
 		if err != nil {
-			return nil, fmt.Errorf("failed to read commit %s: %w", currHash, err)
+			if errors.Is(err, storage.ErrObjectNotFound) {
+				return nil, fmt.Errorf("referencia a commit padre inválida (objeto no encontrado: %s)", currHash)
+			}
+			if errors.Is(err, storage.ErrCorruptObject) {
+				return nil, fmt.Errorf("referencia a commit padre inválida (objeto corrupto: %s)", currHash)
+			}
+			return nil, fmt.Errorf("fallo al leer el commit %s: %w", currHash, err)
 		}
 
 		entries = append(entries, CommitLogEntry{

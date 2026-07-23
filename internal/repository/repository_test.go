@@ -481,3 +481,104 @@ func TestCommitErrorCases(t *testing.T) {
 		t.Fatalf("expected ErrCorruptIndex, got: %v", err)
 	}
 }
+
+func TestLogAndInspectObject(t *testing.T) {
+	repoDir := t.TempDir()
+	repository.InitRepository(repoDir)
+	repo := repository.OpenRepository(repoDir)
+
+	// 1. Log en repositorio sin commits
+	_, err := repo.GetCommitHistory()
+	if !errors.Is(err, repository.ErrNoCommits) {
+		t.Fatalf("expected ErrNoCommits for empty repo, got: %v", err)
+	}
+
+	// 2. Crear primer commit
+	file1Path := filepath.Join(repoDir, "file1.txt")
+	os.WriteFile(file1Path, []byte("Content of file 1"), 0644)
+	repo.Add([]string{"file1.txt"})
+	commit1Res, err := repo.Commit("First commit", "Author1", "author1@test.local")
+	if err != nil {
+		t.Fatalf("First commit failed: %v", err)
+	}
+
+	// 3. Crear segundo commit
+	file2Path := filepath.Join(repoDir, "file2.txt")
+	os.WriteFile(file2Path, []byte("Content of file 2"), 0644)
+	repo.Add([]string{"file2.txt"})
+	commit2Res, err := repo.Commit("Second commit", "Author2", "author2@test.local")
+	if err != nil {
+		t.Fatalf("Second commit failed: %v", err)
+	}
+
+	// 4. Log: verificar orden (commit 2 primero, commit 1 segundo)
+	history, err := repo.GetCommitHistory()
+	if err != nil {
+		t.Fatalf("GetCommitHistory failed: %v", err)
+	}
+	if len(history) != 2 {
+		t.Fatalf("expected 2 commit log entries, got %d", len(history))
+	}
+	if history[0].Hash != commit2Res.Hash {
+		t.Fatalf("newest commit must be first: expected %s, got %s", commit2Res.Hash, history[0].Hash)
+	}
+	if history[1].Hash != commit1Res.Hash {
+		t.Fatalf("oldest commit must be last: expected %s, got %s", commit1Res.Hash, history[1].Hash)
+	}
+	if history[1].ParentHash != "" {
+		t.Fatalf("root commit must have empty parent hash, got: %s", history[1].ParentHash)
+	}
+
+	// 5. InspectObject sobre Commit
+	inspectCommit, err := repo.InspectObject(commit2Res.Hash)
+	if err != nil {
+		t.Fatalf("InspectObject on Commit failed: %v", err)
+	}
+	if inspectCommit.Type != object.TypeCommit {
+		t.Fatalf("expected type commit, got %s", inspectCommit.Type)
+	}
+	if inspectCommit.Commit.Tree == "" {
+		t.Fatalf("expected non-empty tree reference in commit")
+	}
+
+	// 6. InspectObject sobre Tree
+	inspectTree, err := repo.InspectObject(inspectCommit.Commit.Tree)
+	if err != nil {
+		t.Fatalf("InspectObject on Tree failed: %v", err)
+	}
+	if inspectTree.Type != object.TypeTree {
+		t.Fatalf("expected type tree, got %s", inspectTree.Type)
+	}
+	if len(inspectTree.Tree.Entries) == 0 {
+		t.Fatalf("tree entries should not be empty")
+	}
+
+	// 7. InspectObject sobre Blob
+	blobHash := inspectTree.Tree.Entries[0].Hash
+	inspectBlob, err := repo.InspectObject(blobHash)
+	if err != nil {
+		t.Fatalf("InspectObject on Blob failed: %v", err)
+	}
+	if inspectBlob.Type != object.TypeBlob {
+		t.Fatalf("expected type blob, got %s", inspectBlob.Type)
+	}
+	if string(inspectBlob.BlobData) == "" {
+		t.Fatalf("blob data should not be empty")
+	}
+
+	// 8. InspectObject sobre objeto inexistente
+	fakeHash := "0000000000000000000000000000000000000000000000000000000000000000"
+	_, err = repo.InspectObject(fakeHash)
+	if err == nil || !strings.Contains(err.Error(), "No se encontró el objeto solicitado") {
+		t.Fatalf("expected 'No se encontró el objeto solicitado' error, got: %v", err)
+	}
+
+	// 9. InspectObject sobre objeto corrupto
+	corruptPath := filepath.Join(repoDir, ".minigit", "objects", blobHash[:2], blobHash[2:])
+	os.Chmod(corruptPath, 0666)
+	os.WriteFile(corruptPath, []byte("invalid corrupt data"), 0666)
+	_, err = repo.InspectObject(blobHash)
+	if err == nil || !strings.Contains(err.Error(), "Objeto corrupto") {
+		t.Fatalf("expected 'Objeto corrupto' error, got: %v", err)
+	}
+}

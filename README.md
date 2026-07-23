@@ -366,6 +366,48 @@ Actualización de la rama activa / HEAD
 - **Prevención de Commits sin Cambios**: Se compara el hash del `tree` raíz generado desde el Index contra el `tree` raíz del commit padre. Si los hashes son idénticos, la operación se rechaza con `ErrNothingToCommit`.
 - **Persistencia Segura y Reflog**: El objeto `commit` se serializa en UTC RFC3339, se comprime en `zlib` y se almacena en `ObjectStore`. Posteriormente, se actualiza atómicamente la referencia de la rama (`.minigit/refs/heads/<branch>`) o `HEAD`, registrando la transacción en el reflog (`.minigit/logs/...`).
 
+### 9. Historial y Consulta de Objetos (Log y Show)
+
+MiniGit proporciona herramientas avanzadas de navegación en el historial y consulta de objetos almacenados:
+
+#### A. Comando `minigit log`
+El comando `log` permite explorar el historial de cambios del repositorio iniciando en la posición actual de `HEAD`:
+- **Recorrido de Commits Padre**: Navega secuencialmente desde el commit señalado por `HEAD` siguiendo la referencia `Parent` hasta llegar al commit inicial (cuyo atributo `Parent` es vacío `""`).
+- **Seguridad en el Recorrido**: Mantiene un registro de nodos visitados (`visited`) que detecta y aborta inmediatamente cualquier ciclo infinito en la cadena de commits.
+- **Validación de Padres**: Detecta si una referencia a un commit padre apunta a un objeto inexistente o corrupto, informando un error claro sin colapsar el programa.
+- **Sintaxis**:
+  - `minigit log`: Muestra el historial completo (hash, autor, email, fecha formateada RFC1123Z y mensaje).
+  - `minigit log --oneline`: Muestra un formato resumido de una sola línea por commit (`<hash_7_chars> (HEAD -> <rama>) <primera_linea_mensaje>`).
+
+#### B. Comando `minigit show` (Consulta de Objetos)
+El comando `show` permite inspeccionar cualquier objeto direccionable por contenido mediante su hash de 64 caracteres o un prefijo abreviado (por defecto `HEAD` si se omite el argumento):
+
+1. **Objeto Blob (`blob`)**: Descomprime y muestra en consola el contenido crudo original del archivo sin alterar saltos de línea ni perder caracteres.
+2. **Objeto Tree (`tree`)**: Descomprime y muestra la lista de entradas en formato octal con su tipo, hash y nombre:
+   ```text
+   100644 blob e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	archivo.txt
+   040000 tree 4b825dc642cb6eb9a060e54bf8d69288fbee4904ce8e32906b3a0f7902d0eb2d	src
+   ```
+3. **Objeto Commit (`commit`)**: Muestra la cabecera del commit (`tree`, `parent`), los metadatos del autor, fecha, mensaje y el resumen de cambios introducidos respecto al commit padre (`+` agregados, `M` modificados, `-` eliminados).
+
+#### C. Catálogo de Mensajes de Error Frecuentes
+- **Objeto no encontrado**:
+  ```text
+  No se encontró el objeto solicitado: 0000000000000000000000000000000000000000000000000000000000000000
+  ```
+- **Objeto corrupto**:
+  ```text
+  Objeto corrupto: zlib decompression failed / checksum mismatch
+  ```
+- **Repositorio sin commits**:
+  ```text
+  no hay commits registrados en este repositorio
+  ```
+- **Referencia a padre inválida**:
+  ```text
+  referencia a commit padre inválida (objeto no encontrado: <hash>)
+  ```
+
 ---
 
 ## 🔒 Seguridad e Integridad

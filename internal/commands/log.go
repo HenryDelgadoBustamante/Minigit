@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -12,6 +13,10 @@ import (
 func RunLog(repo *repository.Repository, oneline bool) error {
 	entries, err := repo.GetCommitHistory()
 	if err != nil {
+		if errors.Is(err, repository.ErrNoCommits) {
+			fmt.Println("no hay commits registrados en este repositorio")
+			return nil
+		}
 		return err
 	}
 
