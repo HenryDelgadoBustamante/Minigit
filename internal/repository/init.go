@@ -10,7 +10,7 @@ import (
 	"minigit/internal/storage"
 )
 
-// InitRepository initializes a new MiniGit repository in targetDir.
+// InitRepository initializes a new MiniGit repo in targetDir.
 // It returns the opened Repository instance on success.
 func InitRepository(targetDir string) (*Repository, error) {
 	// 1. Resolve target directory (empty means current directory)
