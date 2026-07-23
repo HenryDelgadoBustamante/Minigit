@@ -328,6 +328,44 @@ Commit B
   ```
 - **Reutilización e Inmutabilidad**: Los objetos existentes no se modifican. Si un archivo o subdirectorio no sufre cambios entre commits, los objetos `tree` reutilizan la referencia al hash existente.
 
+### 8. Flujo del Proceso de Commit
+
+El proceso de creación de instantáneas (commits) en MiniGit sigue una secuencia estrictamente ordenada y desacoplada de la interfaz CLI:
+
+```text
+Working Tree
+     │
+     ▼
+    Add
+     │
+     ▼
+    Index (Staging)
+     │
+     ▼
+Creación de Blobs
+     │
+     ▼
+Construcción recursiva de Trees
+     │
+     ▼
+   Tree raíz
+     │
+     ▼
+Objeto Commit
+     │
+     ▼
+Object Store
+     │
+     ▼
+Actualización de la rama activa / HEAD
+```
+
+- **Construcción desde el Index**: El commit se construye a partir del contenido preparado en el Index (`.minigit/index`). Los cambios no preparados del Working Tree se omiten.
+- **Validación del Mensaje y Autor**: El mensaje no puede estar vacío ni compuesto únicamente de espacios. Los datos del autor se leen desde las variables de entorno `MINIGIT_AUTHOR_NAME` y `MINIGIT_AUTHOR_EMAIL` (con fallback predeterminado si no están definidas).
+- **Protección mediante Lock**: Se adquiere un bloqueo exclusivo (`index.lock`) antes de realizar cualquier lectura o modificación crítica.
+- **Prevención de Commits sin Cambios**: Se compara el hash del `tree` raíz generado desde el Index contra el `tree` raíz del commit padre. Si los hashes son idénticos, la operación se rechaza con `ErrNothingToCommit`.
+- **Persistencia Segura y Reflog**: El objeto `commit` se serializa en UTC RFC3339, se comprime en `zlib` y se almacena en `ObjectStore`. Posteriormente, se actualiza atómicamente la referencia de la rama (`.minigit/refs/heads/<branch>`) o `HEAD`, registrando la transacción en el reflog (`.minigit/logs/...`).
+
 ---
 
 ## 🔒 Seguridad e Integridad

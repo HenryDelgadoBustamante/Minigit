@@ -1,8 +1,11 @@
 package storage
 
 import (
+	"bytes"
+	"compress/zlib"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -80,6 +83,50 @@ func (s *ObjectStore) ReadObject(hashPrefix string) ([]byte, string, error) {
 	}
 
 	return decompressed, fullHash, nil
+}
+
+// ReadObjectType reads only the header of an object to determine its type without decompressing the full payload.
+func (s *ObjectStore) ReadObjectType(hashPrefix string) (string, string, error) {
+	fullHash, err := s.ResolveHash(hashPrefix)
+	if err != nil {
+		return "", "", err
+	}
+
+	dir := filepath.Join(s.objectsDir, fullHash[:2])
+	filePath := filepath.Join(dir, fullHash[2:])
+
+	f, err := os.Open(filePath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "", "", fmt.Errorf("%w: %s", ErrObjectNotFound, fullHash)
+		}
+		return "", "", fmt.Errorf("reading object %s failed: %w", fullHash, err)
+	}
+	defer f.Close()
+
+	zr, err := zlib.NewReader(f)
+	if err != nil {
+		return "", "", fmt.Errorf("%w: %v", ErrCorruptObject, err)
+	}
+	defer zr.Close()
+
+	var buf [64]byte
+	n, _ := io.ReadFull(zr, buf[:])
+	if n == 0 {
+		return "", "", fmt.Errorf("%w: empty object file %s", ErrCorruptObject, fullHash)
+	}
+
+	nullIdx := bytes.IndexByte(buf[:n], 0)
+	if nullIdx == -1 {
+		return "", "", fmt.Errorf("%w: missing header null byte in %s", ErrCorruptObject, fullHash)
+	}
+
+	parts := bytes.Split(buf[:nullIdx], []byte{' '})
+	if len(parts) != 2 {
+		return "", "", fmt.Errorf("%w: invalid header format in %s", ErrCorruptObject, fullHash)
+	}
+
+	return string(parts[0]), fullHash, nil
 }
 
 // ResolveHash resolves a 64-character full hash or unambiguous short prefix hash to a full hash.

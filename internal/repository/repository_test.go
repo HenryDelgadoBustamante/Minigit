@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"minigit/internal/object"
 	"minigit/internal/repository"
@@ -317,5 +318,166 @@ func TestMerkleGraphValidationErrors(t *testing.T) {
 	err = repo.ValidateTreeRecursively(mismatchedTreeHash, nil, 1)
 	if err == nil || !strings.Contains(err.Error(), "type mismatch") {
 		t.Fatalf("expected type mismatch error, got: %v", err)
+	}
+}
+
+func TestCommitMessageAndAuthorValidation(t *testing.T) {
+	repoDir := t.TempDir()
+	repository.InitRepository(repoDir)
+	repo := repository.OpenRepository(repoDir)
+
+	os.WriteFile(filepath.Join(repoDir, "a.txt"), []byte("data"), 0644)
+	repo.Add([]string{"a.txt"})
+
+	// Mensaje vacío o solo espacios
+	_, err := repo.Commit("", "Author", "email@test.com")
+	if !errors.Is(err, repository.ErrEmptyCommitMessage) {
+		t.Fatalf("expected ErrEmptyCommitMessage for empty message, got: %v", err)
+	}
+
+	_, err = repo.Commit("   \n\t  ", "Author", "email@test.com")
+	if !errors.Is(err, repository.ErrEmptyCommitMessage) {
+		t.Fatalf("expected ErrEmptyCommitMessage for whitespace message, got: %v", err)
+	}
+
+	// Commit con autor/email predeterminados
+	res, err := repo.Commit("Valid commit", "", "")
+	if err != nil {
+		t.Fatalf("Commit failed: %v", err)
+	}
+
+	commitObj, _, err := repo.GetCommitByHash(res.Hash)
+	if err != nil {
+		t.Fatalf("GetCommitByHash failed: %v", err)
+	}
+	if commitObj.AuthorName != "MiniGit User" || commitObj.AuthorMail != "user@minigit.local" {
+		t.Fatalf("expected default author 'MiniGit User <user@minigit.local>', got '%s <%s>'", commitObj.AuthorName, commitObj.AuthorMail)
+	}
+}
+
+func TestCommitFromIndexNotWorkingTree(t *testing.T) {
+	repoDir := t.TempDir()
+	repository.InitRepository(repoDir)
+	repo := repository.OpenRepository(repoDir)
+
+	filePath := filepath.Join(repoDir, "file.txt")
+	os.WriteFile(filePath, []byte("Content Version A"), 0644)
+	repo.Add([]string{"file.txt"})
+
+	// Modificar archivo en Working Tree sin hacer add (Version B)
+	os.WriteFile(filePath, []byte("Content Version B (unstaged)"), 0644)
+
+	res, err := repo.Commit("Commit Version A", "Tester", "test@minigit.local")
+	if err != nil {
+		t.Fatalf("Commit failed: %v", err)
+	}
+
+	// Verificar que el commit contenga "Version A" y no "Version B"
+	treeMap, err := repo.ReadTreeToMap(res.RootTreeHash)
+	if err != nil {
+		t.Fatalf("ReadTreeToMap failed: %v", err)
+	}
+
+	fileEntry := treeMap["file.txt"]
+	blobRaw, _, err := repo.Objects.ReadObject(fileEntry.Hash)
+	if err != nil {
+		t.Fatalf("ReadObject failed for blob: %v", err)
+	}
+
+	blobObj, err := object.DecodeBlob(blobRaw)
+	if err != nil {
+		t.Fatalf("DecodeBlob failed: %v", err)
+	}
+
+	if string(blobObj.Data) != "Content Version A" {
+		t.Fatalf("expected commit blob content to be 'Content Version A', got '%s'", string(blobObj.Data))
+	}
+}
+
+func TestCommitNoChangesRejection(t *testing.T) {
+	repoDir := t.TempDir()
+	repository.InitRepository(repoDir)
+	repo := repository.OpenRepository(repoDir)
+
+	os.WriteFile(filepath.Join(repoDir, "file.txt"), []byte("content"), 0644)
+	repo.Add([]string{"file.txt"})
+
+	res1, err := repo.Commit("Commit 1", "Tester", "test@minigit.local")
+	if err != nil {
+		t.Fatalf("Commit 1 failed: %v", err)
+	}
+
+	// Intentar hacer commit sin modificar nada en el Index
+	_, err = repo.Commit("Commit 2 sin cambios", "Tester", "test@minigit.local")
+	if !errors.Is(err, repository.ErrNothingToCommit) {
+		t.Fatalf("expected ErrNothingToCommit, got: %v", err)
+	}
+
+	// Verificar que HEAD no haya cambiado
+	headCommit, err := repo.GetHeadCommitHash()
+	if err != nil {
+		t.Fatalf("GetHeadCommitHash failed: %v", err)
+	}
+	if headCommit != res1.Hash {
+		t.Fatalf("HEAD changed despite rejected commit: expected %s, got %s", res1.Hash, headCommit)
+	}
+}
+
+func TestCommitDeterminism(t *testing.T) {
+	fixedTime := time.Date(2026, 7, 23, 10, 0, 0, 0, time.UTC)
+
+	repoDir1 := t.TempDir()
+	repository.InitRepository(repoDir1)
+	repo1 := repository.OpenRepository(repoDir1)
+
+	os.WriteFile(filepath.Join(repoDir1, "data.txt"), []byte("same data"), 0644)
+	repo1.Add([]string{"data.txt"})
+
+	res1, err := repo1.CommitWithTime("Determinism Test", "Author", "author@test.local", fixedTime)
+	if err != nil {
+		t.Fatalf("Commit 1 failed: %v", err)
+	}
+
+	repoDir2 := t.TempDir()
+	repository.InitRepository(repoDir2)
+	repo2 := repository.OpenRepository(repoDir2)
+
+	os.WriteFile(filepath.Join(repoDir2, "data.txt"), []byte("same data"), 0644)
+	repo2.Add([]string{"data.txt"})
+
+	res2, err := repo2.CommitWithTime("Determinism Test", "Author", "author@test.local", fixedTime)
+	if err != nil {
+		t.Fatalf("Commit 2 failed: %v", err)
+	}
+
+	if res1.Hash != res2.Hash {
+		t.Fatalf("commits with identical data & fixed timestamp produced different hashes: %s vs %s", res1.Hash, res2.Hash)
+	}
+}
+
+func TestCommitErrorCases(t *testing.T) {
+	// 1. Lock activo
+	repoDir := t.TempDir()
+	repository.InitRepository(repoDir)
+	repo := repository.OpenRepository(repoDir)
+	os.WriteFile(filepath.Join(repoDir, "a.txt"), []byte("data"), 0644)
+	repo.Add([]string{"a.txt"})
+
+	lock, err := repository.AcquireLock(repository.GetIndexPath(repoDir))
+	if err != nil {
+		t.Fatalf("AcquireLock failed: %v", err)
+	}
+
+	_, err = repo.Commit("Commit locked", "Author", "author@test.local")
+	if !errors.Is(err, repository.ErrLockExists) {
+		t.Fatalf("expected ErrLockExists when repo is locked, got: %v", err)
+	}
+	lock.Unlock()
+
+	// 2. Corrupt Index
+	os.WriteFile(repository.GetIndexPath(repoDir), []byte("{invalid json index"), 0644)
+	_, err = repo.Commit("Commit corrupt index", "Author", "author@test.local")
+	if !errors.Is(err, repository.ErrCorruptIndex) {
+		t.Fatalf("expected ErrCorruptIndex, got: %v", err)
 	}
 }

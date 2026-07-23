@@ -145,17 +145,13 @@ var (
 
 const maxTreeDepth = 100
 
-// GetObjectType reads and unpacks an object to inspect its actual ObjectType without trusting tree metadata.
+// GetObjectType reads the object header to inspect its actual ObjectType without decompressing large payloads.
 func (r *Repository) GetObjectType(hash string) (object.ObjectType, []byte, error) {
-	raw, _, err := r.Objects.ReadObject(hash)
+	objTypeStr, _, err := r.Objects.ReadObjectType(hash)
 	if err != nil {
 		return "", nil, err
 	}
-	objType, _, body, err := object.DecodeObject(raw)
-	if err != nil {
-		return "", nil, err
-	}
-	return objType, body, nil
+	return object.ObjectType(objTypeStr), nil, nil
 }
 
 // ValidateTreeRecursively validates the integrity, structure, object types, and absence of cycles in a tree graph.
